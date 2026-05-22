@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <h1>Завантаж мангу як CBZ, PDF або EPUB для Kindle</h1>
+    <p class="hero-sub">Встав посилання на тайтл або главу з <code>manga.in.ua</code> або <code>faust-web.com</code> — обери глави й формат — отримай готові файли.</p>
+
+    <form class="hero-search" hx-post="/fetch-chapters" hx-target="#chapters" hx-indicator="#loading"
+          hx-on::after-request="document.getElementById('chapters').scrollIntoView({behavior:'smooth'})">
+      <span class="hero-search-icon" aria-hidden="true">🔎</span>
+      <input type="url" name="url" required autofocus
+             placeholder="https://manga.in.ua/mangas/… або https://faust-web.com/manga/…">
+      <button type="submit" class="primary big">
+        <span class="btn-text">Знайти глави</span>
+        <span id="loading" class="htmx-indicator">&hellip;</span>
+      </button>
+    </form>
+
+    <div class="hero-hints muted small">
+      Підтримувані формати: <strong>CBZ</strong> · <strong>PDF</strong> · <strong>EPUB</strong> · <strong>EPUB&nbsp;Kindle</strong> (через KCC, готовий для Send-to-Kindle)
+    </div>
+  </section>
+
+  <section id="chapters"></section>
+
+  <section class="home-grid">
+    <div class="card home-card">
+      <h3>📚 Бібліотека</h3>
+      <p class="muted">Все скачане — переглянути, перевідправити, видалити.</p>
+      <a class="card-link" href="/library">Відкрити бібліотеку →</a>
+    </div>
+    {% if jobs %}
+      <div class="card home-card">
+        <h3>⏱ Останні задачі</h3>
+        <ul class="job-list">
+          {% for j in jobs[:5] %}
+            <li>
+              <a href="/jobs/{{ j.id }}">{{ j.manga_title or j.id }}</a>
+              <span class="badge badge-{{ j.status }}">{{ j.status }}</span>
+              <span class="muted small">{{ j.output_format }}&nbsp;·&nbsp;{{ j.chapters_done }}/{{ j.chapters_total }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

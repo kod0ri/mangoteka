@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Бібліотека{% endblock %}
+{% block content %}
+  <section class="card">
+    <h2>Бібліотека</h2>
+    <p class="muted">
+      {{ entries|length }} манг(а/и) &middot; {{ total_bytes|human_size }} на диску
+    </p>
+
+    {% if not entries %}
+      <p>Поки порожньо. <a href="/">Завантаж першу мангу</a>.</p>
+    {% else %}
+      <table class="library">
+        <thead>
+          <tr>
+            <th>Назва</th>
+            <th>Файлів</th>
+            <th>Формати</th>
+            <th>Розмір</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+            <tr>
+              <td><a href="/library/{{ e.slug }}">{{ e.title }}</a></td>
+              <td>{{ e.files|length }}</td>
+              <td>
+                {% for ext, n in e.format_counts.items() %}
+                  <span class="badge format-badge">{{ ext }} × {{ n }}</span>
+                {% endfor %}
+              </td>
+              <td class="muted">{{ e.total_bytes|human_size }}</td>
+              <td>
+                <form method="post" action="/library/{{ e.slug }}/delete" class="inline"
+                      onsubmit="return confirm('Видалити всю мангу &laquo;{{ e.title }}&raquo; ({{ e.files|length }} файл(ів))?');">
+                  <button class="danger" type="submit">Видалити все</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+{% endblock %}

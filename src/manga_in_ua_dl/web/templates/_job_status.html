@@ -1,0 +1,87 @@
+{% set failed = job.artifacts | rejectattr("artifact") | list %}
+<div class="status-block status-{{ job.status }}">
+  <p>
+    <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+    {{ job.current }}
+  </p>
+  <div class="bar"><div class="bar-fill" style="width: {{ job.progress }}%"></div></div>
+  <p class="muted">{{ job.chapters_done }} / {{ job.chapters_total }} глав</p>
+
+  {% if not job.is_terminal %}
+    <div class="actions job-controls">
+      {% if job.can_pause %}
+        <button hx-post="/jobs/{{ job.id }}/pause" hx-target="#job-status" hx-swap="innerHTML">⏸ Пауза</button>
+      {% endif %}
+      {% if job.can_resume %}
+        <button hx-post="/jobs/{{ job.id }}/resume" hx-target="#job-status" hx-swap="innerHTML">▶ Продовжити</button>
+      {% endif %}
+      {% if job.can_stop %}
+        <button hx-post="/jobs/{{ job.id }}/stop"
+                hx-confirm="Зупинити після поточної глави? Скачане лишиться."
+                hx-target="#job-status" hx-swap="innerHTML">■ Зупинити</button>
+        <button class="danger"
+                hx-post="/jobs/{{ job.id }}/cancel"
+                hx-confirm="Скасувати і видалити все, що ця задача скачала?"
+                hx-target="#job-status" hx-swap="innerHTML">✕ Скасувати</button>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if job.error %}
+    <p class="error"><strong>Помилка:</strong> {{ job.error }}</p>
+  {% endif %}
+
+  {% if job.manga_slug %}
+    <p class="muted">Манга:
+      <a href="/library/{{ job.manga_slug }}">{{ job.manga_title or job.manga_slug }}</a>
+    </p>
+  {% endif %}
+
+  {% if job.artifacts %}
+    <div class="files-header">
+      <h3>Файли</h3>
+      {% if failed and job.is_terminal %}
+        <form action="/jobs" method="post" class="retry-form">
+          <input type="hidden" name="url" value="{{ job.title_or_chapter_url }}">
+          <input type="hidden" name="format" value="{{ job.output_format }}">
+          <input type="hidden" name="mode" value="{{ job.retry_mode }}">
+          <input type="hidden" name="chapter_concurrency" value="{{ job.chapter_concurrency }}">
+          <input type="hidden" name="image_concurrency" value="{{ job.image_concurrency }}">
+          {% for u in job.retry_chapters %}
+            <input type="hidden" name="chapter" value="{{ u }}">
+          {% endfor %}
+          <button type="submit" class="primary retry-all-btn">
+            🔄 Повторити всі помилкові ({{ failed|length }})
+          </button>
+        </form>
+      {% endif %}
+    </div>
+    <ul class="files">
+      {% for a in job.artifacts %}
+        <li>
+          {% if a.artifact %}
+            <a href="/jobs/{{ job.id }}/files/{{ a.artifact.name }}" download>{{ a.artifact.name }}</a>
+            {% if a.skipped %}<span class="muted small">(уже було)</span>{% endif %}
+          {% else %}
+            <span class="error">
+              [error] {{ a.chapter_title }}{% if a.error %} — {{ a.error }}{% else %} — невідома помилка{% endif %}
+            </span>
+            {% if job.is_terminal %}
+              <form action="/jobs" method="post" class="retry-form inline">
+                <input type="hidden" name="url" value="{{ job.title_or_chapter_url }}">
+                <input type="hidden" name="format" value="{{ job.output_format }}">
+                <input type="hidden" name="mode" value="{{ a.retry_mode }}">
+                <input type="hidden" name="chapter_concurrency" value="{{ job.chapter_concurrency }}">
+                <input type="hidden" name="image_concurrency" value="{{ job.image_concurrency }}">
+                {% for u in (a.retry_urls if a.retry_urls else [a.chapter_url]) %}
+                  <input type="hidden" name="chapter" value="{{ u }}">
+                {% endfor %}
+                <button type="submit" class="retry-btn" title="Повторити цю главу">🔄</button>
+              </form>
+            {% endif %}
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>

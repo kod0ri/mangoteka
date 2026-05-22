@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Задача {{ job.id }}{% endblock %}
+{% block content %}
+  <section class="card">
+    <h2>Задача <code>{{ job.id }}</code></h2>
+    <p class="muted">Формат: <strong>{{ job.output_format|upper }}</strong> &middot;
+                    Джерело: <a href="{{ job.title_or_chapter_url }}" target="_blank">{{ job.title_or_chapter_url }}</a></p>
+
+    <div id="job-status"
+         hx-get="/jobs/{{ job.id }}/status"
+         hx-trigger="load, every 2s"
+         hx-swap="innerHTML">
+      {% include "_job_status.html" %}
+    </div>
+  </section>
+
+  <script>
+    // Stop the 2s status polling once we reach a terminal state.
+    const TERMINAL = ["done", "error", "stopped", "cancelled"];
+    const target = document.getElementById("job-status");
+    document.body.addEventListener("htmx:afterSwap", (e) => {
+      if (e.detail.target !== target) return;
+      const block = target.querySelector(".status-block");
+      if (!block) return;
+      const cls = [...block.classList].find(c => c.startsWith("status-"));
+      const status = cls ? cls.slice("status-".length) : "";
+      if (TERMINAL.includes(status)) {
+        target.removeAttribute("hx-trigger");
+        htmx.process(target);
+      }
+    });
+  </script>
+{% endblock %}

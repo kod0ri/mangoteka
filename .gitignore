@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.claude/
+handoff.md
+
+# runtime data
+data/
+out/
+*.cbz
+*.pdf
+*.epub
+*.mobi
+*.azw3
+
+# editors
+.idea/
+.vscode/
+*.swp

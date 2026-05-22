@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.title }} — бібліотека{% endblock %}
+{% block content %}
+  <section class="card">
+    <p class="muted"><a href="/library">← Бібліотека</a></p>
+    <h2>{{ entry.title }}</h2>
+    <p class="muted">
+      {{ entry.files|length }} файл(ів) &middot; {{ entry.total_bytes|human_size }}
+    </p>
+
+    <table class="library">
+      <thead>
+        <tr><th>Файл</th><th>Розмір</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for f in entry.files %}
+          <tr>
+            <td>
+              <a href="/library/{{ entry.slug }}/files/{{ f.name }}" download>{{ f.name }}</a>
+            </td>
+            <td class="muted">{{ f.stat().st_size|human_size }}</td>
+            <td>
+              <form method="post"
+                    action="/library/{{ entry.slug }}/files/{{ f.name }}/delete"
+                    class="inline"
+                    onsubmit="return confirm('Видалити &laquo;{{ f.name }}&raquo;?');">
+                <button class="danger" type="submit">Видалити</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <form method="post" action="/library/{{ entry.slug }}/delete"
+          onsubmit="return confirm('Видалити всю мангу &laquo;{{ entry.title }}&raquo;?');"
+          style="margin-top: 1rem">
+      <button class="danger" type="submit">Видалити всю мангу</button>
+    </form>
+  </section>
+{% endblock %}

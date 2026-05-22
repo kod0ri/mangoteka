@@ -1,0 +1,176 @@
+{% if error %}
+  <div class="card error-card">
+    <strong>Помилка:</strong> {{ error }}
+  </div>
+{% elif chapters %}
+  <form id="dlForm" action="/jobs" method="post">
+    <input type="hidden" name="url" value="{{ url }}">
+
+    {% if manga %}
+      <section class="manga-header">
+        {% if manga.cover_url %}
+          <img class="cover" src="{{ manga.cover_url }}" alt="" referrerpolicy="no-referrer">
+        {% endif %}
+        <div>
+          <h2>{{ manga.title }}</h2>
+          <div class="meta-row">
+            {% if manga.kind %}<span class="chip">{{ manga.kind }}</span>{% endif %}
+            {% if manga.year %}<span class="chip">{{ manga.year }}</span>{% endif %}
+            {% if manga.translation_status %}<span class="chip">{{ manga.translation_status }}</span>{% endif %}
+          </div>
+          {% if manga.genres %}
+            <div class="genres muted">{{ manga.genres|join(' · ') }}</div>
+          {% endif %}
+          {% if manga.translators %}
+            <div class="muted small">Переклад: {{ manga.translators|join(', ') }}</div>
+          {% endif %}
+        </div>
+      </section>
+    {% endif %}
+
+    <div class="action-bar" id="actionBar">
+      <div class="action-bar-row">
+        <button type="submit" class="primary big" id="submitBtn" disabled>
+          ⬇ Завантажити <span class="count-pill"><span id="selCount">0</span></span>
+        </button>
+        <details class="settings-popover">
+          <summary>⚙ Налаштування</summary>
+          <div class="settings-panel">
+            <fieldset>
+              <legend>Формат</legend>
+              <label><input type="radio" name="format" value="cbz" checked> CBZ <span class="muted small">(сирий zip)</span></label>
+              <label><input type="radio" name="format" value="pdf"> PDF</label>
+              <label><input type="radio" name="format" value="epub"> EPUB <span class="muted small">(Calibre/телефон)</span></label>
+              <label><input type="radio" name="format" value="kindle"> EPUB Kindle <span class="muted small">(KCC → Send-to-Kindle)</span></label>
+            </fieldset>
+            <fieldset>
+              <legend>Режим</legend>
+              <label><input type="radio" name="mode" value="single" checked> Файл на главу</label>
+              <label><input type="radio" name="mode" value="volume"> Один файл на том</label>
+            </fieldset>
+            <fieldset>
+              <legend>Швидкість</legend>
+              <label>Парал. глав
+                <select name="chapter_concurrency">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                  <option value="4">4</option>
+                  <option value="6">6</option>
+                </select>
+              </label>
+              <label>Парал. картинок
+                <select name="image_concurrency">
+                  <option value="6">6</option>
+                  <option value="10" selected>10</option>
+                  <option value="15">15</option>
+                  <option value="20">20</option>
+                </select>
+              </label>
+            </fieldset>
+          </div>
+        </details>
+      </div>
+      <div class="action-bar-row second">
+        <div class="quick">
+          <button type="button" onclick="selectAll(true)">Усі</button>
+          <button type="button" onclick="selectAll(false)">Жодного</button>
+        </div>
+        <input type="search" id="search" placeholder="🔍 Пошук по главі…" autocomplete="off">
+        <span class="muted small" id="totalInfo">{{ chapters|length }} глав</span>
+      </div>
+    </div>
+
+    <section class="vol-list">
+      {% for volume, chs in groups.items() %}
+        <details class="vol-group" open data-volume="{{ volume }}">
+          <summary>
+            <span class="vol-title">
+              {% if volume != '—' %}Том {{ volume }}{% else %}Без тому{% endif %}
+            </span>
+            <span class="muted small">
+              <span class="vol-selected">0</span>/{{ chs|length }}
+            </span>
+            <span class="vol-actions" onclick="event.stopPropagation()">
+              <button type="button" onclick="selectVol('{{ volume }}', true)">+</button>
+              <button type="button" onclick="selectVol('{{ volume }}', false)">−</button>
+            </span>
+          </summary>
+          <ul class="chapter-list">
+            {% for ch in chs %}
+              <li data-volume="{{ volume }}" data-search="{{ (ch.title or '')|lower }}">
+                <label>
+                  <input type="checkbox" name="chapter" value="{{ ch.url }}">
+                  <span class="ch-num">Розділ {{ ch.number }}</span>
+                  <span class="ch-title muted small">{{ ch.title|replace('Том ' + volume + '. Розділ ' + ch.number, '')|replace('Переклад:', '— переклад:')|truncate(120) }}</span>
+                </label>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endfor %}
+    </section>
+  </form>
+
+  <script>
+    (function() {
+      const form = document.getElementById('dlForm');
+      const submitBtn = document.getElementById('submitBtn');
+      const selCount = document.getElementById('selCount');
+      const totalInfo = document.getElementById('totalInfo');
+      const totalChapters = {{ chapters|length }};
+
+      function update() {
+        const checked = form.querySelectorAll('input[name=chapter]:checked');
+        selCount.textContent = checked.length;
+        submitBtn.disabled = checked.length === 0;
+        form.querySelectorAll('details.vol-group').forEach(d => {
+          const vol = d.dataset.volume;
+          const tot = d.querySelectorAll('input[name=chapter]').length;
+          const cnt = d.querySelectorAll('input[name=chapter]:checked').length;
+          d.querySelector('.vol-selected').textContent = cnt;
+          d.classList.toggle('vol-has-selection', cnt > 0);
+        });
+      }
+      form.addEventListener('change', update);
+
+      window.selectAll = function(state) {
+        form.querySelectorAll('input[name=chapter]').forEach(c => {
+          if (c.closest('li').style.display !== 'none') c.checked = state;
+        });
+        update();
+      };
+      window.selectVol = function(volume, state) {
+        form.querySelectorAll(`li[data-volume="${CSS.escape(volume)}"] input[name=chapter]`)
+          .forEach(c => { if (c.closest('li').style.display !== 'none') c.checked = state; });
+        update();
+      };
+
+      document.getElementById('search').addEventListener('input', (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        let shown = 0;
+        form.querySelectorAll('li[data-search]').forEach(li => {
+          const visible = !q || li.dataset.search.includes(q);
+          li.style.display = visible ? '' : 'none';
+          if (visible) shown++;
+        });
+        totalInfo.textContent = q ? `${shown}/${totalChapters} показано` : `${totalChapters} глав`;
+      });
+
+      update();
+
+      // Close the settings popover on outside click / Escape.
+      const settings = document.querySelector('.settings-popover');
+      if (settings) {
+        document.addEventListener('click', (e) => {
+          if (settings.open && !settings.contains(e.target)) {
+            settings.open = false;
+          }
+        });
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && settings.open) settings.open = false;
+        });
+      }
+    })();
+  </script>
+{% endif %}

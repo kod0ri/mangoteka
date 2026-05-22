@@ -1,0 +1,16 @@
+.venv
+.git
+.gitignore
+data/
+out/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.idea/
+.vscode/
+*.cbz
+*.pdf
+*.epub
