@@ -34,14 +34,14 @@ git pull && docker compose up -d --build  # оновлення
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-manga-dl-web          # веб-UI → http://localhost:8000
+mangoteka-web          # веб-UI → http://localhost:8000
 
 # або CLI
-manga-dl title   'https://manga.in.ua/mangas/.../...html' --from 1 --to 10
-manga-dl chapter 'https://manga.in.ua/chapters/....html'
+mangoteka title   'https://manga.in.ua/mangas/.../...html' --from 1 --to 10
+mangoteka chapter 'https://manga.in.ua/chapters/....html'
 
-manga-dl title   'https://faust-web.com/manga/nazva-slugom'
-manga-dl chapter 'https://faust-web.com/manga/nazva/tom-1/rozdil-1'
+mangoteka title   'https://faust-web.com/manga/nazva-slugom'
+mangoteka chapter 'https://faust-web.com/manga/nazva/tom-1/rozdil-1'
 ```
 
 **KCC** (тільки для формату Kindle): у Docker вже вбудований. Нативно:
@@ -68,8 +68,8 @@ pip install "kindlecomicconverter @ git+https://github.com/ciromattia/kcc.git"
 ## CLI
 
 ```
-manga-dl title URL [OPTIONS]
-manga-dl chapter URL [OPTIONS]
+mangoteka title URL [OPTIONS]
+mangoteka chapter URL [OPTIONS]
 ```
 
 | Опція | За замовчуванням | Опис |
@@ -97,7 +97,7 @@ manga-dl chapter URL [OPTIONS]
 ## Структура
 
 ```
-src/manga_in_ua_dl/
+src/mangoteka/
 ├── scraper.py         — MangaClient (manga.in.ua) + make_client() factory
 ├── faust_scraper.py   — FaustClient (faust-web.com REST API)
 ├── downloader.py      — паралельне завантаження, глобальний семафор, 429+Retry-After
@@ -108,7 +108,7 @@ src/manga_in_ua_dl/
     ├── app.py         — FastAPI ендпойнти
     ├── jobs.py        — JobStore: стейт-машина + SQLite-персистентність
     ├── library.py     — бібліотека на диску
-    ├── __main__.py    — точка входу manga-dl-web
+    ├── __main__.py    — точка входу mangoteka-web
     └── templates/     — Jinja2 + HTMX
 ```
 
@@ -118,10 +118,10 @@ src/manga_in_ua_dl/
 
 | Змінна | Дефолт | Опис |
 |---|---|---|
-| `MANGA_DL_HOST` | `127.0.0.1` | bind-адреса (в Docker: `0.0.0.0`) |
-| `MANGA_DL_PORT` | `8000` | порт |
-| `MANGA_DL_DATA` | `./data` | де зберігаються бібліотека і `jobs.db` |
-| `MANGA_DL_RELOAD` | — | `1` для auto-reload у розробці |
+| `MANGOTEKA_HOST` | `127.0.0.1` | bind-адреса (в Docker: `0.0.0.0`) |
+| `MANGOTEKA_PORT` | `8000` | порт |
+| `MANGOTEKA_DATA` | `./data` | де зберігаються бібліотека і `jobs.db` |
+| `MANGOTEKA_RELOAD` | — | `1` для auto-reload у розробці |
 
 ---
 

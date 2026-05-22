@@ -1,14 +1,14 @@
 services:
   web:
     build: .
-    image: manga-in-ua-dl:latest
-    container_name: manga-dl
+    image: mangoteka:latest
+    container_name: mangoteka
     ports:
       - "${WEB_PORT:-8765}:8000"
     volumes:
       - ./data:/data
     restart: unless-stopped
     environment:
-      MANGA_DL_HOST: "0.0.0.0"
-      MANGA_DL_PORT: "8000"
-      MANGA_DL_DATA: "/data"
+      MANGOTEKA_HOST: "0.0.0.0"
+      MANGOTEKA_PORT: "8000"
+      MANGOTEKA_DATA: "/data"

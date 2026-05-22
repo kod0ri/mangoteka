@@ -1,7 +1,7 @@
 [project]
-name = "manga-in-ua-dl"
+name = "mangoteka"
 version = "0.1.0"
-description = "Downloader for manga.in.ua → CBZ (Kindle-ready via KCC)"
+description = "Downloader for manga.in.ua and faust-web.com → CBZ / PDF / EPUB / Kindle EPUB"
 requires-python = ">=3.10"
 dependencies = [
     "httpx[http2]>=0.27",
@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
-manga-dl = "manga_in_ua_dl.cli:cli"
-manga-dl-web = "manga_in_ua_dl.web.__main__:main"
+mangoteka     = "mangoteka.cli:cli"
+mangoteka-web = "mangoteka.web.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]

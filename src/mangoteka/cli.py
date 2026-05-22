@@ -9,7 +9,7 @@ import click
 
 from .downloader import download_images
 from .packager import make_cbz
-from .scraper import Chapter, MangaClient
+from .scraper import Chapter, make_client
 
 
 def _slug(text: str, max_len: int = 80) -> str:
@@ -26,7 +26,7 @@ def _chapter_filename(ch: Chapter, pad: int) -> str:
 
 
 async def _download_one(
-    client: MangaClient,
+    client: object,
     chapter_url: str,
     cbz_path: Path,
     label: str,
@@ -54,7 +54,7 @@ async def _download_one(
 
 @click.group()
 def cli() -> None:
-    """Download manga from manga.in.ua as CBZ (Kindle-ready via KCC)."""
+    """Download manga from manga.in.ua or faust-web.com as CBZ / PDF / EPUB / Kindle EPUB."""
 
 
 @cli.command("chapter")
@@ -66,7 +66,7 @@ def chapter_cmd(url: str, out: Path, concurrency: int, keep_raw: bool) -> None:
     """Download a single chapter URL."""
 
     async def run() -> None:
-        async with MangaClient() as client:
+        async with make_client(url) as client:
             m = re.search(r"/chapters/\d+-([^/]+)\.html$", url)
             slug = m.group(1) if m else "chapter"
             cbz_path = out / f"{_slug(slug)}.cbz"
@@ -97,9 +97,12 @@ def title_cmd(
     """Download chapters from a title page (or any chapter URL of that title)."""
 
     async def run() -> None:
-        async with MangaClient() as client:
-            chapters = await client.fetch_chapter_list(url)
-            title_slug = _slug(chapters[0].title.split("Розділ")[0].rstrip(". "))
+        async with make_client(url) as client:
+            meta, chapters = await asyncio.gather(
+                client.fetch_meta(url),
+                client.fetch_chapter_list(url),
+            )
+            title_slug = _slug(meta.title)
 
             def in_range(ch: Chapter) -> bool:
                 try:

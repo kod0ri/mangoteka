@@ -165,6 +165,13 @@ def _inject_itemref_properties(opf_data: bytes) -> bytes:
     return _ITEMREF_RE.sub(replace, opf_data)
 
 
+def _book_title(manga: "MangaMeta", chapters: "list[EpubChapter]", volume: "str | None") -> str:
+    if volume is not None:
+        return f"{manga.title} — Том {volume}"
+    ch = chapters[0].meta
+    return f"{manga.title} — Том {ch.volume or '1'}, Розділ {ch.number}"
+
+
 async def make_epub(
     epub_path: Path,
     *,
@@ -186,13 +193,8 @@ async def make_epub(
     epub_path.parent.mkdir(parents=True, exist_ok=True)
     book = epub.EpubBook()
 
-    if volume is not None:
-        book_title = f"{manga.title} — Том {volume}"
-        series_index = volume
-    else:
-        ch = chapters[0].meta
-        book_title = f"{manga.title} — Том {ch.volume or '1'}, Розділ {ch.number}"
-        series_index = ch.number or "1"
+    book_title = _book_title(manga, chapters, volume)
+    series_index = volume if volume is not None else (chapters[0].meta.number or "1")
 
     book.set_identifier(f"urn:uuid:{uuid.uuid4()}")
     book.set_title(book_title)
@@ -411,11 +413,7 @@ async def make_kindle_epub(
 
     epub_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if volume is not None:
-        book_title = f"{manga.title} — Том {volume}"
-    else:
-        ch = chapters[0].meta
-        book_title = f"{manga.title} — Том {ch.volume or '1'}, Розділ {ch.number}"
+    book_title = _book_title(manga, chapters, volume)
 
     # Use a working dir next to the final artifact (on the data volume) instead
     # of /tmp. KCC writes ~3× the input CBZ size in scratch files; the default

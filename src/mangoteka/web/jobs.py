@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import sqlite3
 import tempfile
 import uuid
@@ -39,6 +40,7 @@ JobStatus = Literal[
 OutputFormat = Literal["cbz", "pdf", "epub", "kindle"]
 Mode = Literal["single", "volume"]
 TERMINAL_STATUSES = {"done", "error", "stopped", "cancelled"}
+_FORMAT_EXT: dict[str, str] = {"cbz": ".cbz", "pdf": ".pdf", "epub": ".epub", "kindle": ".kindle.epub"}
 
 
 @dataclass
@@ -49,10 +51,8 @@ class JobChapterResult:
     artifact: Path | None = None
     error: str | None = None
     skipped: bool = False
-    # URLs to submit when retrying this artifact; empty = [chapter_url].
     retry_urls: list[str] = field(default_factory=list)
-    # "volume" retries submit all chapter URLs for that volume in volume mode.
-    retry_mode: str = "single"
+    retry_mode: Mode = "single"
 
 
 @dataclass
@@ -243,18 +243,21 @@ class JobStore:
             def _on_html_status(msg: str) -> None:
                 job.current = msg
             async with make_client(job.title_or_chapter_url, status_callback=_on_html_status) as client, make_image_client() as img_client:
-                meta = await client.fetch_meta(job.title_or_chapter_url)
+                meta, cl_result = await asyncio.gather(
+                    client.fetch_meta(job.title_or_chapter_url),
+                    client.fetch_chapter_list(job.title_or_chapter_url),
+                    return_exceptions=True,
+                )
+                if isinstance(meta, BaseException):
+                    raise meta
                 job.manga_title = meta.title
                 job.manga_slug = safe_filename(meta.title, max_len=80)
                 manga_dir = self.library_dir / job.manga_slug
                 manga_dir.mkdir(parents=True, exist_ok=True)
-
-                chapter_info: dict[str, Chapter] = {}
-                try:
-                    cl = await client.fetch_chapter_list(job.title_or_chapter_url)
-                    chapter_info = {c.url: c for c in cl}
-                except Exception:
-                    pass
+                chapter_info: dict[str, Chapter] = (
+                    {} if isinstance(cl_result, BaseException)
+                    else {c.url: c for c in cl_result}
+                )
 
                 if job.mode == "volume":
                     await self._run_volume_mode(
@@ -307,9 +310,7 @@ class JobStore:
         chapter_info: dict[str, Chapter],
     ) -> None:
         pad = max(3, len(str(len(job.chapter_urls))))
-        ext = {"cbz": ".cbz", "pdf": ".pdf", "epub": ".epub", "kindle": ".kindle.epub"}[
-            job.output_format
-        ]
+        ext = _FORMAT_EXT[job.output_format]
         sem = asyncio.Semaphore(job.chapter_concurrency)
         done_lock = asyncio.Lock()
 
@@ -335,18 +336,19 @@ class JobStore:
                 else:
                     job.current = f"{label}: завантаження…"
                     try:
-                        images = await self._download_chapter_images(
-                            client, img_client, job, ch_url
-                        )
-                        chapters_payload = [
-                            EpubChapter(meta=ch_meta, image_paths=images)
-                        ]
-                        await self._package(
-                            job, meta, chapters_payload, out_path, referer=ch_url
-                        )
-                        # The temp dir holding `images` will go out of scope after
-                        # _package returns; copy of images is already inside the
-                        # produced artifact, so we don't need them anymore.
+                        tmp = Path(tempfile.mkdtemp(prefix=f"jobimg_{job.id}_"))
+                        try:
+                            images = await self._download_chapter_images(
+                                client, img_client, job, ch_url, temp_dir=tmp
+                            )
+                            chapters_payload = [
+                                EpubChapter(meta=ch_meta, image_paths=images)
+                            ]
+                            await self._package(
+                                job, meta, chapters_payload, out_path, referer=ch_url
+                            )
+                        finally:
+                            shutil.rmtree(tmp, ignore_errors=True)
                         job.owned_files.append(out_path)
                         result = JobChapterResult(
                             chapter_number=ch_meta.number,
@@ -393,19 +395,11 @@ class JobStore:
             if ch and ch.volume:
                 vol = ch.volume
             else:
-                _, _ = _parse_volume_chapter(ch.title if ch else "", url)
-                vol = (
-                    _parse_volume_chapter(ch.title if ch else "", url)[0] or "0"
-                )
+                vol = _parse_volume_chapter(ch.title if ch else "", url)[0] or "0"
             groups.setdefault(vol, []).append(url)
 
-        ext = {"cbz": ".cbz", "pdf": ".pdf", "epub": ".epub", "kindle": ".kindle.epub"}[
-            job.output_format
-        ]
+        ext = _FORMAT_EXT[job.output_format]
         done_lock = asyncio.Lock()
-        # Within a volume, chapters download in parallel. Volumes themselves
-        # run sequentially so each completes (and the user gets a usable file)
-        # before the next starts — and global request load stays predictable.
         in_volume_chapter_sem = asyncio.Semaphore(job.chapter_concurrency)
         ordered_groups = sorted(groups.items(), key=lambda kv: int(kv[0] or 0))
 
@@ -514,7 +508,6 @@ class JobStore:
                         )
                     )
             finally:
-                import shutil
                 shutil.rmtree(tmp_root, ignore_errors=True)
 
     # ---- helpers ----

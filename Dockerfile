@@ -25,12 +25,12 @@ COPY src ./src
 RUN pip install --no-cache-dir -e . \
  && pip install --no-cache-dir "kindlecomicconverter @ git+https://github.com/ciromattia/kcc.git"
 
-ENV MANGA_DL_HOST=0.0.0.0 \
-    MANGA_DL_PORT=8000 \
-    MANGA_DL_DATA=/data
+ENV MANGOTEKA_HOST=0.0.0.0 \
+    MANGOTEKA_PORT=8000 \
+    MANGOTEKA_DATA=/data
 
 RUN mkdir -p /data
 VOLUME ["/data"]
 EXPOSE 8000
 
-CMD ["manga-dl-web"]
+CMD ["mangoteka-web"]

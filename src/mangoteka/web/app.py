@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Annotated
@@ -10,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..scraper import make_client
-from .jobs import JobStore
+from .jobs import JobStore, OutputFormat, _FORMAT_EXT
 from .library import (
     delete_file,
     delete_manga,
@@ -25,10 +26,10 @@ TEMPLATES = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 TEMPLATES.env.filters["human_size"] = human_size
 STATIC_DIR = PACKAGE_DIR / "static"
 
-DATA_DIR = Path(os.environ.get("MANGA_DL_DATA", "./data")).resolve()
+DATA_DIR = Path(os.environ.get("MANGOTEKA_DATA", "./data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="manga.in.ua downloader")
+app = FastAPI(title="Манґотека")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 _store: JobStore | None = None
@@ -63,8 +64,10 @@ async def fetch_chapters(
         raise HTTPException(400, "url is required")
     try:
         async with make_client(url) as client:
-            chapters = await client.fetch_chapter_list(url)
-            meta = await client.fetch_meta(url)
+            chapters, meta = await asyncio.gather(
+                client.fetch_chapter_list(url),
+                client.fetch_meta(url),
+            )
     except Exception as e:  # noqa: BLE001
         return TEMPLATES.TemplateResponse(
             request, "chapters.html",
@@ -105,7 +108,7 @@ async def create_job(
     chapter_concurrency: Annotated[int, Form()] = 3,
     image_concurrency: Annotated[int, Form()] = 10,
 ) -> RedirectResponse:
-    if format not in {"cbz", "pdf", "epub", "kindle"}:
+    if format not in _FORMAT_EXT:
         raise HTTPException(400, "invalid format")
     if mode not in {"single", "volume"}:
         raise HTTPException(400, "invalid mode")

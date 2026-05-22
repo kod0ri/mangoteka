@@ -24,12 +24,18 @@ class LibraryEntry:
 
 
 def _safe_subpath(root: Path, child: str) -> Path:
-    """Resolve child under root preventing path traversal."""
     candidate = (root / child).resolve()
     root_resolved = root.resolve()
-    if not str(candidate).startswith(str(root_resolved) + "/") and candidate != root_resolved:
+    if candidate != root_resolved and not candidate.is_relative_to(root_resolved):
         raise ValueError("path escapes library root")
     return candidate
+
+
+def _list_files(manga_dir: Path) -> list[Path]:
+    return sorted(
+        (f for f in manga_dir.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS),
+        key=lambda p: p.name,
+    )
 
 
 def list_mangas(library_dir: Path) -> list[LibraryEntry]:
@@ -39,10 +45,7 @@ def list_mangas(library_dir: Path) -> list[LibraryEntry]:
     for d in sorted(library_dir.iterdir(), key=lambda p: p.name.lower()):
         if not d.is_dir():
             continue
-        files = sorted(
-            [f for f in d.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS],
-            key=lambda p: p.name,
-        )
+        files = _list_files(d)
         if not files:
             continue
         out.append(
@@ -60,10 +63,7 @@ def get_manga(library_dir: Path, slug: str) -> LibraryEntry | None:
     manga_dir = _safe_subpath(library_dir, slug)
     if not manga_dir.is_dir():
         return None
-    files = sorted(
-        [f for f in manga_dir.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS],
-        key=lambda p: p.name,
-    )
+    files = _list_files(manga_dir)
     return LibraryEntry(
         slug=manga_dir.name,
         title=manga_dir.name,

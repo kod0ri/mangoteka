@@ -1,0 +1,57 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - link "📚 Манґотека" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e5]: 📚
+        - generic [ref=e6]: Манґотека
+      - link "Бібліотека" [ref=e7] [cursor=pointer]:
+        - /url: /library
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - heading "Завантаж мангу як CBZ, PDF або EPUB для Kindle" [level=1] [ref=e10]
+      - paragraph [ref=e11]:
+        - text: Встав посилання на тайтл або главу з
+        - code [ref=e12]: manga.in.ua
+        - text: або
+        - code [ref=e13]: faust-web.com
+        - text: — обери глави й формат — отримай готові файли.
+      - generic [ref=e14]:
+        - generic [ref=e15]: 🔎
+        - textbox "https://manga.in.ua/mangas/… або https://faust-web.com/manga/…" [active] [ref=e16]
+        - button "Знайти глави …" [ref=e17] [cursor=pointer]
+      - generic [ref=e18]:
+        - text: "Підтримувані формати:"
+        - strong [ref=e19]: CBZ
+        - text: ·
+        - strong [ref=e20]: PDF
+        - text: ·
+        - strong [ref=e21]: EPUB
+        - text: ·
+        - strong [ref=e22]: EPUB Kindle
+        - text: (через KCC, готовий для Send-to-Kindle)
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - heading "📚 Бібліотека" [level=3] [ref=e25]
+        - paragraph [ref=e26]: Все скачане — переглянути, перевідправити, видалити.
+        - link "Відкрити бібліотеку →" [ref=e27] [cursor=pointer]:
+          - /url: /library
+      - generic [ref=e28]:
+        - heading "⏱ Останні задачі" [level=3] [ref=e29]
+        - list [ref=e30]:
+          - listitem [ref=e31]:
+            - link "Токійський ґуль:re" [ref=e32] [cursor=pointer]:
+              - /url: /jobs/8c3112062803
+            - generic [ref=e33]: done
+            - generic [ref=e34]: kindle · 20/20
+          - listitem [ref=e35]:
+            - link "Токійський ґуль:re" [ref=e36] [cursor=pointer]:
+              - /url: /jobs/a355347bd5fa
+            - generic [ref=e37]: done
+            - generic [ref=e38]: kindle · 20/20
+          - listitem [ref=e39]:
+            - link "Токійський ґуль" [ref=e40] [cursor=pointer]:
+              - /url: /jobs/23b97525d706
+            - generic [ref=e41]: done
+            - generic [ref=e42]: cbz · 1/1
+  - contentinfo [ref=e43]: Манґотека · особисте використання · поважай авторів і перекладачів

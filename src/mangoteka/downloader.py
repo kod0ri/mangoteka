@@ -77,9 +77,9 @@ async def download_images(
                 return dest
 
             async def _acquire():
+                await local_sem.acquire()
                 if global_sem is not None:
                     await global_sem.acquire()
-                await local_sem.acquire()
 
             def _release():
                 local_sem.release()
