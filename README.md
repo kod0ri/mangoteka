@@ -1,111 +1,150 @@
-# manga.in.ua downloader
+# Манґотека
 
-Завантажує мангу з [manga.in.ua](https://manga.in.ua) у форматі **CBZ**, **PDF** або **EPUB**
-(оптимізований для Kindle Paperwhite 11-12 через [KCC](https://github.com/ciromattia/kcc)).
+Завантажує мангу з **[manga.in.ua](https://manga.in.ua)** та **[faust-web.com](https://faust-web.com)**
+у форматах **CBZ · PDF · EPUB · EPUB для Kindle** (через [KCC](https://github.com/ciromattia/kcc)).
 
-Має два інтерфейси:
-
-- **CLI** — `manga-dl chapter URL` / `manga-dl title URL`
-- **Веб** — простий локальний UI на FastAPI з вибором глав та формату
+Два інтерфейси: веб-UI та CLI. Призначений для локального запуску або деплою на VPS.
 
 ---
 
-## Запуск у Docker (рекомендовано)
-
-KCC і всі залежності вже всередині образу — нічого ставити на хост не треба.
+## Швидкий старт
 
 ```bash
 docker compose up -d --build
 # → http://localhost:8765
 ```
 
-Завантажені файли осідатимуть у `./data/` поруч із репозиторієм.
+Бібліотека зберігається у `./data/library/` і переживає перезапуски контейнера.
 
-Зупинка: `docker compose down`. Оновлення: `git pull && docker compose up -d --build`.
+```bash
+docker compose down          # зупинити
+docker compose logs -f       # логи
+git pull && docker compose up -d --build  # оновлення
+```
 
-Порт за замовчуванням — `8765`. Змінити: `WEB_PORT=9000 docker compose up -d --build`
-або експортувати `WEB_PORT` в `.env` біля `docker-compose.yml`.
+Порт за замовчуванням — `8765`. Змінити: `WEB_PORT=9000 docker compose up -d --build`.
+
+---
 
 ## Локальний запуск без Docker
 
-Потрібно: Python ≥ 3.10. EPUB-формат додатково потребує KCC (для CBZ/PDF — не треба).
+Потрібно: Python ≥ 3.10. KCC потрібен тільки для формату Kindle.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# вебка
-manga-dl-web                        # → http://localhost:8000
+manga-dl-web          # веб-UI → http://localhost:8000
 
 # або CLI
-manga-dl title 'https://manga.in.ua/mangas/.../...html' --from 1 --to 10
+manga-dl title   'https://manga.in.ua/mangas/.../...html' --from 1 --to 10
 manga-dl chapter 'https://manga.in.ua/chapters/....html'
+
+manga-dl title   'https://faust-web.com/manga/nazva-slugom'
+manga-dl chapter 'https://faust-web.com/manga/nazva/tom-1/rozdil-1'
 ```
 
-**KCC для EPUB** (Arch Linux): `yay -S kcc`. На інших дистрибутивах — встанови з джерел згідно з [інструкціями KCC](https://github.com/ciromattia/kcc#installation), або просто користуйся Docker-варіантом, де KCC уже всередині.
-
-## Розгортання на VPS
-
-Той самий `docker-compose.yml`:
-
+**KCC** (тільки для формату Kindle): у Docker вже вбудований. Нативно:
 ```bash
-git clone <repo> manga-dl && cd manga-dl
-docker compose up -d --build
+pip install "kindlecomicconverter @ git+https://github.com/ciromattia/kcc.git"
+# або Arch: yay -S kcc
 ```
 
-Зверху додай reverse-proxy для HTTPS (Caddy найпростіше):
+---
 
-```caddy
-manga.example.com {
-    reverse_proxy localhost:8000
-}
+## Веб-UI
+
+1. Встав URL тайтлу або глави → натисни **Знайти глави**
+2. Обери глави, формат (`CBZ / PDF / EPUB / EPUB Kindle`), режим (`файл на главу` або `один файл на том`)
+3. Натисни **Завантажити**
+4. Спостерігай прогрес на сторінці задачі. Кнопки: ⏸ Пауза · ■ Зупинити · ✕ Скасувати
+5. Готові файли — у `/library`
+
+Якщо якась глава впала — кнопка 🔄 повторить тільки її (або одразу всі помилкові).
+Після рестарту контейнера завершені задачі видно в історії; файли на диску зберігаються.
+
+---
+
+## CLI
+
+```
+manga-dl title URL [OPTIONS]
+manga-dl chapter URL [OPTIONS]
 ```
 
-Або на безкоштовному tier'і:
+| Опція | За замовчуванням | Опис |
+|---|---|---|
+| `-o / --out` | `./data/library` | куди писати файли |
+| `-c / --concurrency` | `8` | паралельних завантажень |
+| `--from N` | — | з глави N (тільки `title`) |
+| `--to N` | — | по главу N включно (тільки `title`) |
+| `--list-only` | — | показати список і вийти (тільки `title`) |
+| `--keep-raw` | — | зберегти вихідні JPEG поруч із CBZ |
 
-- **Fly.io**: `fly launch` → авто-детект Dockerfile → `fly deploy`
-- **Render**: створи Web Service з типом Docker, підключи репо
+---
 
-Враховуй: у безкоштовних tier'ах диск ефемерний — `./data/` стиратиметься на рестартах. Для постійного зберігання приєднай volume / persistent disk.
+## Формати виводу
 
-## Налаштування
+| Формат | Чим | Примітки |
+|---|---|---|
+| **CBZ** | zip JPEG | читається будь-яким CBZ-ридером |
+| **PDF** | img2pdf | лосслес, без EXIF-ротації |
+| **EPUB** | ebooklib | фіксований layout, SVG-обгортка для масштабування |
+| **EPUB Kindle** | KCC | оптимізовано для Send-to-Kindle; надійніше ніж рідний EPUB |
 
-| Змінна             | Дефолт      | Опис                                     |
-|--------------------|-------------|------------------------------------------|
-| `MANGA_DL_HOST`    | `127.0.0.1` | bind-адреса (в Docker уже `0.0.0.0`)     |
-| `MANGA_DL_PORT`    | `8000`      | порт                                     |
-| `MANGA_DL_DATA`    | `./data`    | де зберігаються артефакти                |
-| `MANGA_DL_RELOAD`  | —           | `1` для auto-reload у devel              |
-
-## Що під капотом
-
-- **Збір сторінок**: GET сторінки глави → витяг `site_login_hash` з JS → AJAX `mod=load_chapters_image` повертає `<img data-src=...>`
-- **Список глав**: AJAX `mod=load_chapters` з `news_category=54` (примусово; на сторінці тайтла дефолтна категорія повертає інший рендер)
-- **Завантаження**: async httpx, семафор 6-8 паралельних, retry x3, skip-on-404 (на сайті є мертві посилання, як обкладинка `_000a.jpg` Tokyo Ghoul)
-- **CBZ** — ZIP без стиснення (JPEG уже стиснутий)
-- **PDF** — img2pdf, лосслес
-- **EPUB** — `kcc-c2e --profile KPW5 --manga-style --upscale` (RTL, оптимізовано під екран Paperwhite)
+---
 
 ## Структура
 
 ```
 src/manga_in_ua_dl/
-├── scraper.py        — HTTP клієнт + парсинг manga.in.ua
-├── downloader.py     — паралельне завантаження картинок
-├── packager.py       — CBZ
-├── converters.py     — PDF (img2pdf) + EPUB (KCC subprocess)
-├── cli.py            — CLI
+├── scraper.py         — MangaClient (manga.in.ua) + make_client() factory
+├── faust_scraper.py   — FaustClient (faust-web.com REST API)
+├── downloader.py      — паралельне завантаження, глобальний семафор, 429+Retry-After
+├── converters.py      — CBZ / PDF / EPUB / Kindle EPUB
+├── packager.py        — legacy CBZ для CLI
+├── cli.py             — Click CLI
 └── web/
-    ├── app.py        — FastAPI ендпойнти
-    ├── jobs.py       — in-memory job tracker з прогресом
-    ├── __main__.py   — `manga-dl-web` точка входу
-    └── templates/    — Jinja2 + HTMX
+    ├── app.py         — FastAPI ендпойнти
+    ├── jobs.py        — JobStore: стейт-машина + SQLite-персистентність
+    ├── library.py     — бібліотека на диску
+    ├── __main__.py    — точка входу manga-dl-web
+    └── templates/     — Jinja2 + HTMX
 ```
+
+---
+
+## Налаштування
+
+| Змінна | Дефолт | Опис |
+|---|---|---|
+| `MANGA_DL_HOST` | `127.0.0.1` | bind-адреса (в Docker: `0.0.0.0`) |
+| `MANGA_DL_PORT` | `8000` | порт |
+| `MANGA_DL_DATA` | `./data` | де зберігаються бібліотека і `jobs.db` |
+| `MANGA_DL_RELOAD` | — | `1` для auto-reload у розробці |
+
+---
+
+## Деплой на VPS
+
+```bash
+git clone <repo> mangoteka && cd mangoteka
+docker compose up -d --build
+```
+
+Поверх — reverse-proxy для HTTPS (Caddy):
+
+```caddy
+manga.example.com {
+    reverse_proxy localhost:8765
+}
+```
+
+На безкоштовних tier'ах (Fly.io, Render) диск ефемерний — для постійного зберігання
+приєднай volume / persistent disk до `/data`.
+
+---
 
 ## Юридичне
 
-Інструмент призначений для особистого використання — резервне копіювання офіційно
-доступного контенту manga.in.ua. Поважай авторів і перекладачів, підтримуй їх там,
-де можеш.
-# mangoteka
+Для особистого використання. Поважай авторів і перекладачів, підтримуй їх там, де можеш.
