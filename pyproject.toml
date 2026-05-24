@@ -14,7 +14,9 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "img2pdf>=0.5",
+    "pillow>=10.0",
     "aiofiles>=23.2",
+    "aiosqlite>=0.20",
     "ebooklib>=0.18",
 ]
 

@@ -1,0 +1,85 @@
+{% if results %}
+  {% set sources = results | map(attribute='source') | unique | list %}
+  {% if sources | length > 1 %}
+    <div class="source-filters" id="source-filters">
+      <button class="filter-btn active" data-filter="all" onclick="filterSrc('all',this)">
+        Всі <span class="count-pill">{{ results|length }}</span>
+      </button>
+      {% for src in sources %}
+        {% set n = results | selectattr('source', 'equalto', src) | list | length %}
+        {% set labels = {
+          'manga-in-ua': 'Manga.in.ua', 'mangadex': 'MangaDex',
+          'comick': 'Comick', 'webtoon': 'Webtoon',
+          'mangaplus': 'MangaPlus', 'faust': 'Faust'
+        } %}
+        <button class="filter-btn source-badge source-{{ src }}" data-filter="{{ src }}" onclick="filterSrc('{{ src }}',this)">
+          {{ labels.get(src, src) }} <span class="count-pill">{{ n }}</span>
+        </button>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="search-results" id="search-results-grid">
+    {% for r in results %}
+      <div class="search-card" data-source="{{ r.source }}">
+        <div class="search-card-cover"
+             hx-post="/fetch-chapters"
+             hx-vals='{"url": "{{ r.url }}"}'
+             hx-target="#chapters"
+             hx-swap="innerHTML"
+             hx-indicator="#loading"
+             hx-on::after-request="document.getElementById('chapters').scrollIntoView({behavior:'smooth'})">
+          {% if r.cover_url %}
+            {% if r.source in ("webtoon", "manga-in-ua") %}
+              <img src="/proxy/img?url={{ r.cover_url|urlencode }}" alt="" loading="lazy">
+            {% else %}
+              <img src="{{ r.cover_url }}" alt="" referrerpolicy="no-referrer" loading="lazy">
+            {% endif %}
+          {% else %}
+            <div class="search-card-no-cover">?</div>
+          {% endif %}
+        </div>
+        <div class="search-card-info">
+          <div class="search-card-title"
+               hx-post="/fetch-chapters"
+               hx-vals='{"url": "{{ r.url }}"}'
+               hx-target="#chapters"
+               hx-swap="innerHTML"
+               hx-indicator="#loading"
+               hx-on::after-request="document.getElementById('chapters').scrollIntoView({behavior:'smooth'})">{{ r.title }}</div>
+          <div class="search-card-meta">
+            <span class="source-badge source-{{ r.source }}">{{ r.source_label }}</span>
+            {% if r.status %}<span class="chip small">{{ r.status }}</span>{% endif %}
+          </div>
+          <div class="search-card-counts muted small">
+            {% if r.chapter_count %}{{ r.chapter_count }} гл.{% endif %}
+            {% if r.volume_count %} · {{ r.volume_count }} т.{% endif %}
+            {% if r.lang_display %} · 🌐 {{ r.lang_display }}{% endif %}
+          </div>
+          {% if r.description %}
+            <div class="search-card-desc muted small">{{ r.description|truncate(110) }}</div>
+          {% endif %}
+          <a href="{{ r.url }}" target="_blank" rel="noopener" class="search-card-open">Відкрити ↗</a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <script>
+    function filterSrc(src, btn) {
+      document.querySelectorAll('#source-filters .filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('#search-results-grid .search-card').forEach(card => {
+        card.style.display = (src === 'all' || card.dataset.source === src) ? '' : 'none';
+      });
+    }
+  </script>
+{% elif results is defined %}
+  <div class="card error-card muted">Нічого не знайдено.</div>
+{% endif %}
+
+{% if errors %}
+  <div class="muted small search-errors">
+    ⚠ Помилки: {% for e in errors %}{{ e }}{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+{% endif %}

@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import re
-from typing import TYPE_CHECKING
 
 import httpx
 
+from ._http import RetryClient
 from .scraper import Chapter, MangaMeta, UA
-
-if TYPE_CHECKING:
-    pass
 
 BASE = "https://faust-web.com"
 API = f"{BASE}/api"
@@ -20,7 +16,6 @@ _TITLE_URL_RE = re.compile(
 _CHAPTER_URL_RE = re.compile(
     r"^https?://faust-web\.com/manga/([^/?#]+)/(.+?)(?:\?.*)?$"
 )
-# Convert chapter slug path back: "tom-1/rozdil-5" ← "tom-1-rozdil-5"
 _TOM_RE = re.compile(r"^(tom-\d+)-(.+)$")
 
 
@@ -36,86 +31,47 @@ def _title_slug(url: str) -> str:
 
 
 def _chapter_slug_from_url(url: str) -> tuple[str, str]:
-    """Return (title_slug, chapter_slug) from a chapter URL.
-
-    URL:   /manga/tokiiskyi-gul/tom-1/rozdil-1
-    slugs: ("tokiiskyi-gul", "tom-1-rozdil-1")
-    """
     m = _CHAPTER_URL_RE.match(url)
     if not m:
         raise ValueError(f"не розпізнано URL розділу faust-web.com: {url}")
     title_slug = m.group(1)
     path_tail = m.group(2).rstrip("/")
-    # join remaining path segments with "-"
     chapter_slug = path_tail.replace("/", "-")
     return title_slug, chapter_slug
 
 
 def _chapter_url(title_slug: str, chapter_slug: str) -> str:
-    """Build web URL from title + chapter slug.
-
-    "tom-1-rozdil-5" → "/manga/{title}/tom-1/rozdil-5"
-    "rozdil-5"       → "/manga/{title}/rozdil-5"
-    """
     m = _TOM_RE.match(chapter_slug)
     path_tail = f"{m.group(1)}/{m.group(2)}" if m else chapter_slug
     return f"{BASE}/manga/{title_slug}/{path_tail}"
 
 
-class FaustClient:
+class FaustClient(RetryClient):
     def __init__(
         self,
         timeout: float = 30.0,
         concurrency: int = 4,
         status_callback: "callable[[str], None] | None" = None,
     ) -> None:
-        self._client = httpx.AsyncClient(
-            headers={"user-agent": UA, "accept-language": "uk,en;q=0.8"},
-            timeout=timeout,
-            follow_redirects=True,
-            http2=True,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+        super().__init__(
+            client=httpx.AsyncClient(
+                headers={"user-agent": UA, "accept-language": "uk,en;q=0.8"},
+                timeout=timeout,
+                follow_redirects=True,
+                http2=True,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+            ),
+            concurrency=concurrency,
+            status_callback=status_callback,
         )
-        self._sem = asyncio.Semaphore(concurrency)
-        self._status_callback = status_callback
-
-    async def __aenter__(self) -> "FaustClient":
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self._client.aclose()
 
     async def _get(self, path: str, **kwargs) -> httpx.Response:
-        url = f"{API}{path}"
-        max_429 = 8
-        retries = 0
-        while True:
-            await self._sem.acquire()
-            try:
-                r = await self._client.get(
-                    url,
-                    headers={"accept": "application/json"},
-                    **kwargs,
-                )
-            except Exception:
-                self._sem.release()
-                raise
-            if r.status_code != 429:
-                self._sem.release()
-                r.raise_for_status()
-                return r
-            retries += 1
-            if retries > max_429:
-                self._sem.release()
-                r.raise_for_status()
-            raw = r.headers.get("retry-after")
-            wait = max(5.0, float(raw)) if raw else 10.0
-            self._sem.release()
-            if self._status_callback:
-                self._status_callback(
-                    f"⚠ 429 backoff {wait:.0f}s (retry {retries}/{max_429})"
-                )
-            await asyncio.sleep(wait)
+        return await self._request(
+            "GET",
+            f"{API}{path}",
+            headers={"accept": "application/json"},
+            **kwargs,
+        )
 
     async def fetch_meta(self, url: str) -> MangaMeta:
         slug = _title_slug(url)
@@ -153,6 +109,33 @@ class FaustClient:
             raise RuntimeError("список розділів порожній")
         return chapters
 
+    @classmethod
+    async def search(cls, query: str, limit: int = 10) -> list:
+        """Search faust-web.com and return SearchResult list."""
+        from .search import SearchResult
+        try:
+            async with cls() as client:
+                r = await client._get("/titles", params={"search": query, "limit": limit})
+                data = r.json()
+        except Exception:
+            return []
+        results: list[SearchResult] = []
+        items = data if isinstance(data, list) else data.get("items") or data.get("data") or []
+        for item in items[:limit]:
+            slug = item.get("slug", "")
+            title = item.get("name") or item.get("title") or slug
+            if not title or not slug:
+                continue
+            results.append(SearchResult(
+                title=title,
+                url=f"https://faust-web.com/manga/{slug}",
+                source="faust",
+                cover_url=item.get("coverImageUrl"),
+                status=item.get("publicationStatus"),
+                genres=[g["name"] for g in item.get("genres", []) if g.get("name")],
+            ))
+        return results
+
     async def fetch_chapter_images(self, chapter_url: str) -> tuple[str, list[str]]:
         title_slug, ch_slug = _chapter_slug_from_url(chapter_url)
         r = await self._get(
@@ -161,7 +144,13 @@ class FaustClient:
         d = r.json()
         ch_title = d.get("name") or ch_slug
         pages = sorted(d.get("pages", []), key=lambda p: p["pageNumber"])
-        urls = [p["blobName"] for p in pages if p.get("blobName")]
+        urls: list[str] = []
+        for p in pages:
+            blob = p.get("blobName")
+            if not blob:
+                continue
+            # Normalize: Azure Blob Storage URLs are usually absolute, but guard against relative paths
+            urls.append(blob if blob.startswith("http") else f"{BASE}/{blob.lstrip('/')}")
         if not urls:
             raise RuntimeError(f"немає зображень у розділі: {ch_slug}")
         return ch_title, urls

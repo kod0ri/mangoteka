@@ -10,16 +10,17 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    import aiosqlite as _aiosqlite
 
 from ..converters import (
     ChapterMeta,
     EpubChapter,
+    _FORMAT_EXT,
     chapter_filename,
-    make_cbz_from_chapters,
-    make_epub,
-    make_kindle_epub,
-    make_pdf_from_chapters,
+    package_chapters,
     safe_filename,
     volume_filename,
 )
@@ -40,7 +41,6 @@ JobStatus = Literal[
 OutputFormat = Literal["cbz", "pdf", "epub", "kindle"]
 Mode = Literal["single", "volume"]
 TERMINAL_STATUSES = {"done", "error", "stopped", "cancelled"}
-_FORMAT_EXT: dict[str, str] = {"cbz": ".cbz", "pdf": ".pdf", "epub": ".epub", "kindle": ".kindle.epub"}
 
 
 @dataclass
@@ -148,14 +148,23 @@ class JobStore:
         self.library_dir.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, Job] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        # Created lazily inside the event loop on first use.
         self._global_img_sem: asyncio.Semaphore | None = None
-        self._db = sqlite3.connect(
-            str(base_dir / "jobs.db"), check_same_thread=False
-        )
-        self._db.row_factory = sqlite3.Row
-        self._db_init()
-        self._load_historical_jobs()
+        # aiosqlite connection — created lazily on first async write.
+        self._adb: _aiosqlite.Connection | None = None
+        self._db_write_lock = asyncio.Lock()
+        # Sync bootstrap: create tables + load history before event loop is hot.
+        self._db_path = str(base_dir / "jobs.db")
+        with sqlite3.connect(self._db_path) as _conn:
+            _conn.row_factory = sqlite3.Row
+            self._db_init_sync(_conn)
+            self._load_historical_jobs(_conn)
+
+    async def _get_adb(self) -> "_aiosqlite.Connection":
+        if self._adb is None:
+            import aiosqlite
+            self._adb = await aiosqlite.connect(self._db_path)
+            self._adb.row_factory = aiosqlite.Row
+        return self._adb
 
     def _img_semaphore(self) -> asyncio.Semaphore:
         if self._global_img_sem is None:
@@ -254,6 +263,7 @@ class JobStore:
                 job.manga_slug = safe_filename(meta.title, max_len=80)
                 manga_dir = self.library_dir / job.manga_slug
                 manga_dir.mkdir(parents=True, exist_ok=True)
+                await self._save_cover(meta.cover_url, manga_dir, job.title_or_chapter_url)
                 chapter_info: dict[str, Chapter] = (
                     {} if isinstance(cl_result, BaseException)
                     else {c.url: c for c in cl_result}
@@ -286,17 +296,17 @@ class JobStore:
                     job.status = "done"
                     job.current = f"готово — {ok} артефакт(ів)"
                     job.progress = 100
-            self._save_job(job)
+            await self._save_job(job)
         except asyncio.CancelledError:
             job.status = "cancelled"
             job.current = "cancelled"
-            self._save_job(job)
+            await self._save_job(job)
             raise
         except Exception as e:  # noqa: BLE001
             job.status = "error"
             job.error = _err_str(e)
             job.current = f"error: {job.error}"
-            self._save_job(job)
+            await self._save_job(job)
 
     # ---- single-chapter mode ----
 
@@ -341,6 +351,7 @@ class JobStore:
                             images = await self._download_chapter_images(
                                 client, img_client, job, ch_url, temp_dir=tmp
                             )
+                            self._save_cover_if_missing(manga_dir, images)
                             chapters_payload = [
                                 EpubChapter(meta=ch_meta, image_paths=images)
                             ]
@@ -401,7 +412,7 @@ class JobStore:
         ext = _FORMAT_EXT[job.output_format]
         done_lock = asyncio.Lock()
         in_volume_chapter_sem = asyncio.Semaphore(job.chapter_concurrency)
-        ordered_groups = sorted(groups.items(), key=lambda kv: int(kv[0] or 0))
+        ordered_groups = sorted(groups.items(), key=lambda kv: _vol_sort_key(kv[0]))
 
         for volume, urls in ordered_groups:
             await job.pause_event.wait()
@@ -493,6 +504,7 @@ class JobStore:
                     continue
 
                 job.current = f"{vol_label}: збираю {job.output_format.upper()}…"
+                self._save_cover_if_missing(manga_dir, epub_chapters[0].image_paths)
                 await self._package(
                     job, meta, epub_chapters, out_path,
                     referer=urls[0], volume=volume,
@@ -540,15 +552,22 @@ class JobStore:
         ch_url: str,
         temp_dir: Path | None = None,
     ) -> list[Path]:
+        if temp_dir is None:
+            temp_dir = Path(tempfile.mkdtemp(prefix=f"jobimg_{job.id}_"))
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clients that handle their own download+decryption (e.g. MangaPlus)
+        if hasattr(client, "download_images_to_dir"):
+            return await client.download_images_to_dir(  # type: ignore[attr-defined]
+                ch_url, temp_dir,
+                concurrency=job.image_concurrency,
+                global_sem=self._img_semaphore(),
+            )
+
         _, image_urls = await client.fetch_chapter_images(ch_url)
-        if temp_dir is not None:
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            target_dir = temp_dir
-        else:
-            target_dir = Path(tempfile.mkdtemp(prefix=f"jobimg_{job.id}_"))
         return await download_images(
             image_urls,
-            target_dir,
+            temp_dir,
             referer=ch_url,
             concurrency=job.image_concurrency,
             client=img_client,  # type: ignore[arg-type]
@@ -565,87 +584,91 @@ class JobStore:
         referer: str,
         volume: str | None = None,
     ) -> Path:
-        if job.output_format == "cbz":
-            make_cbz_from_chapters(chapters, out_path)
-        elif job.output_format == "pdf":
-            make_pdf_from_chapters(chapters, out_path)
-        elif job.output_format == "epub":
-            await make_epub(
-                out_path,
-                manga=meta,
-                chapters=chapters,
-                referer=referer,
-                volume=volume,
-            )
-        elif job.output_format == "kindle":
-            await make_kindle_epub(
-                out_path,
-                manga=meta,
-                chapters=chapters,
-                volume=volume,
-            )
-        else:
-            raise ValueError(f"unknown format: {job.output_format}")
-        return out_path
+        return await package_chapters(
+            job.output_format, out_path, meta, chapters, referer=referer, volume=volume
+        )
+
+    @staticmethod
+    async def _save_cover(cover_url: str | None, manga_dir: Path, referer: str) -> None:
+        if not cover_url:
+            return
+        cover_path = manga_dir / "cover.jpg"
+        if cover_path.exists():
+            return
+        try:
+            import httpx as _httpx
+            from ..scraper import UA
+            async with _httpx.AsyncClient(
+                headers={"user-agent": UA, "referer": referer},
+                follow_redirects=True, timeout=15,
+            ) as c:
+                r = await c.get(cover_url)
+                r.raise_for_status()
+                cover_path.write_bytes(r.content)
+        except Exception:
+            pass
+
+    def _save_cover_if_missing(self, manga_dir: Path, images: list[Path]) -> None:
+        cover = manga_dir / "cover.jpg"
+        if not cover.exists() and images:
+            try:
+                shutil.copy2(images[0], cover)
+            except OSError:
+                pass
 
     def _cleanup_owned(self, job: Job) -> None:
         for p in job.owned_files:
             try:
-                if p.exists():
-                    p.unlink()
+                p.unlink(missing_ok=True)
             except OSError:
                 pass
 
     # ---- SQLite persistence ----
 
-    def _db_init(self) -> None:
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                title_or_chapter_url TEXT NOT NULL,
-                manga_title TEXT NOT NULL,
-                manga_slug TEXT NOT NULL,
-                output_format TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                status TEXT NOT NULL,
-                error TEXT,
-                progress INTEGER NOT NULL DEFAULT 0,
-                chapters_total INTEGER NOT NULL DEFAULT 0,
-                chapters_done INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                artifacts_json TEXT NOT NULL DEFAULT '[]'
-            )
-        """)
-        self._db.commit()
-
-    def _save_job(self, job: Job) -> None:
-        artifacts_json = json.dumps([_artifact_to_dict(a) for a in job.artifacts])
-        self._db.execute(
-            """INSERT OR REPLACE INTO jobs
-               (id, title_or_chapter_url, manga_title, manga_slug,
-                output_format, mode, status, error, progress,
-                chapters_total, chapters_done, created_at, artifacts_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                job.id,
-                job.title_or_chapter_url,
-                job.manga_title,
-                job.manga_slug,
-                job.output_format,
-                job.mode,
-                job.status,
-                job.error,
-                job.progress,
-                job.chapters_total,
-                job.chapters_done,
-                job.created_at.isoformat(),
-                artifacts_json,
-            ),
+    _CREATE_TABLE = """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            title_or_chapter_url TEXT NOT NULL,
+            manga_title TEXT NOT NULL,
+            manga_slug TEXT NOT NULL,
+            output_format TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            progress INTEGER NOT NULL DEFAULT 0,
+            chapters_total INTEGER NOT NULL DEFAULT 0,
+            chapters_done INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            artifacts_json TEXT NOT NULL DEFAULT '[]'
         )
-        self._db.commit()
+    """
 
-    def _load_historical_jobs(self) -> None:
-        rows = self._db.execute(
+    def _db_init_sync(self, conn: sqlite3.Connection) -> None:
+        conn.execute(self._CREATE_TABLE)
+        conn.commit()
+
+    async def _save_job(self, job: Job) -> None:
+        artifacts_json = json.dumps([_artifact_to_dict(a) for a in job.artifacts])
+        params = (
+            job.id, job.title_or_chapter_url, job.manga_title, job.manga_slug,
+            job.output_format, job.mode, job.status, job.error, job.progress,
+            job.chapters_total, job.chapters_done, job.created_at.isoformat(),
+            artifacts_json,
+        )
+        async with self._db_write_lock:
+            db = await self._get_adb()
+            await db.execute(
+                """INSERT OR REPLACE INTO jobs
+                   (id, title_or_chapter_url, manga_title, manga_slug,
+                    output_format, mode, status, error, progress,
+                    chapters_total, chapters_done, created_at, artifacts_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                params,
+            )
+            await db.commit()
+
+    def _load_historical_jobs(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
             "SELECT * FROM jobs ORDER BY created_at ASC"
         ).fetchall()
         for row in rows:
@@ -674,6 +697,13 @@ class JobStore:
 
 
 # ---- module-level helpers ----
+
+def _vol_sort_key(v: str) -> tuple[int, int]:
+    try:
+        return (0, int(v))
+    except ValueError:
+        return (1, 0)
+
 
 def _err_str(e: Exception) -> str:
     return str(e) or f"{type(e).__name__} (деталей немає)"

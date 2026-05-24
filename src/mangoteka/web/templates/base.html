@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}Манґотека{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ css_v }}">
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
 </head>
 <body>
@@ -14,6 +14,16 @@
         <span class="brand-logo">📚</span>
         <span class="brand-name">Манґотека</span>
       </a>
+      <form id="smart-form" class="header-search" onsubmit="return smartSubmit(event)">
+        <span class="header-search-icon" aria-hidden="true">🔍</span>
+        <input id="smart-input" type="text" name="q" autocomplete="off"
+               placeholder="Пошук або посилання…"
+               oninput="smartInput()">
+        <button type="submit" class="primary">
+          Перейти
+          <span id="loading" class="htmx-indicator">&hellip;</span>
+        </button>
+      </form>
       <a class="nav-link" href="/library">Бібліотека</a>
     </nav>
   </header>
@@ -23,5 +33,58 @@
   <footer>
     <small>Манґотека · особисте використання · поважай авторів і перекладачів</small>
   </footer>
+  <script>
+    var _searchTimer;
+    function isUrl(v) { return /^https?:\/\//.test(v); }
+    function clearSearchResults() {
+      var el = document.getElementById('search-results');
+      if (el) el.innerHTML = '';
+    }
+    function smartInput() {
+      clearTimeout(_searchTimer);
+      var v = document.getElementById('smart-input').value.trim();
+      if (!v || isUrl(v)) { clearSearchResults(); return; }
+      _searchTimer = setTimeout(function() {
+        var el = document.getElementById('search-results');
+        if (el) htmx.ajax('GET', '/search?q=' + encodeURIComponent(v), {target: '#search-results'});
+      }, 400);
+    }
+    function smartSubmit(e) {
+      e.preventDefault();
+      var v = document.getElementById('smart-input').value.trim();
+      if (!v) return false;
+      if (isUrl(v)) {
+        clearSearchResults();
+        var ch = document.getElementById('chapters');
+        if (ch) {
+          htmx.ajax('POST', '/fetch-chapters', {target: '#chapters', values: {url: v}});
+          setTimeout(function() { ch.scrollIntoView({behavior: 'smooth'}); }, 300);
+        } else {
+          window.location.href = '/?url=' + encodeURIComponent(v);
+        }
+      } else {
+        var el = document.getElementById('search-results');
+        if (el) htmx.ajax('GET', '/search?q=' + encodeURIComponent(v), {target: '#search-results'});
+        else window.location.href = '/?q=' + encodeURIComponent(v);
+      }
+      return false;
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      var params = new URLSearchParams(location.search);
+      var urlParam = params.get('url');
+      var qParam = params.get('q');
+      var inp = document.getElementById('smart-input');
+      if (!inp) return;
+      if (urlParam) {
+        inp.value = urlParam;
+        var ch = document.getElementById('chapters');
+        if (ch) htmx.ajax('POST', '/fetch-chapters', {target: '#chapters', values: {url: urlParam}});
+      } else if (qParam) {
+        inp.value = qParam;
+        var el = document.getElementById('search-results');
+        if (el) htmx.ajax('GET', '/search?q=' + encodeURIComponent(qParam), {target: '#search-results'});
+      }
+    });
+  </script>
 </body>
 </html>

@@ -4,43 +4,50 @@
   <section class="card">
     <h2>Бібліотека</h2>
     <p class="muted">
-      {{ entries|length }} манг(а/и) &middot; {{ total_bytes|human_size }} на диску
+      {{ total_mangas }} манг(а/и) &middot; {{ total_bytes|human_size }} на диску
     </p>
 
     {% if not entries %}
       <p>Поки порожньо. <a href="/">Завантаж першу мангу</a>.</p>
     {% else %}
-      <table class="library">
-        <thead>
-          <tr>
-            <th>Назва</th>
-            <th>Файлів</th>
-            <th>Формати</th>
-            <th>Розмір</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for e in entries %}
-            <tr>
-              <td><a href="/library/{{ e.slug }}">{{ e.title }}</a></td>
-              <td>{{ e.files|length }}</td>
-              <td>
+      <div class="library-grid">
+        {% for e in entries %}
+          <a class="lib-card" href="/library/{{ e.slug }}">
+            <div class="lib-card-cover">
+              {% if e.cover_path %}
+                <img src="/library/{{ e.slug }}/cover" alt="" loading="lazy">
+              {% else %}
+                <div class="lib-card-no-cover">📚</div>
+              {% endif %}
+            </div>
+            <div class="lib-card-info">
+              <div class="lib-card-title">{{ e.title }}</div>
+              <div class="lib-card-meta muted small">
                 {% for ext, n in e.format_counts.items() %}
-                  <span class="badge format-badge">{{ ext }} × {{ n }}</span>
+                  <span class="badge format-badge">{{ ext }}×{{ n }}</span>
                 {% endfor %}
-              </td>
-              <td class="muted">{{ e.total_bytes|human_size }}</td>
-              <td>
-                <form method="post" action="/library/{{ e.slug }}/delete" class="inline"
-                      onsubmit="return confirm('Видалити всю мангу &laquo;{{ e.title }}&raquo; ({{ e.files|length }} файл(ів))?');">
-                  <button class="danger" type="submit">Видалити все</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+                <span>{{ e.total_bytes|human_size }}</span>
+              </div>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if total_pages > 1 %}
+        <nav class="pagination">
+          {% if page > 1 %}
+            <a class="pag-btn" href="/library?page={{ page - 1 }}">← Попередня</a>
+          {% else %}
+            <span class="pag-btn disabled">← Попередня</span>
+          {% endif %}
+          <span class="pag-info muted small">{{ page }} / {{ total_pages }}</span>
+          {% if page < total_pages %}
+            <a class="pag-btn" href="/library?page={{ page + 1 }}">Наступна →</a>
+          {% else %}
+            <span class="pag-btn disabled">Наступна →</span>
+          {% endif %}
+        </nav>
+      {% endif %}
     {% endif %}
   </section>
 {% endblock %}

@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 EXTENSIONS = (".cbz", ".pdf", ".epub", ".mobi", ".azw3")
+PAGE_SIZE = 24
 
 
 @dataclass(frozen=True)
 class LibraryEntry:
-    slug: str  # manga folder name
-    title: str  # human-readable title (derived from slug)
+    slug: str
+    title: str
     files: list[Path]
     total_bytes: int
+    cover_path: Path | None = None
 
     @property
     def format_counts(self) -> dict[str, int]:
@@ -38,25 +40,65 @@ def _list_files(manga_dir: Path) -> list[Path]:
     )
 
 
-def list_mangas(library_dir: Path) -> list[LibraryEntry]:
+def _try_extract_cover(archive: Path, dest: Path) -> None:
+    import zipfile
+    try:
+        with zipfile.ZipFile(archive) as z:
+            names = z.namelist()
+            images = [
+                n for n in names
+                if n.lower().endswith((".jpg", ".jpeg", ".png"))
+            ]
+            # Prefer files with "cover" in name, then first image alphabetically.
+            candidates = sorted(images, key=lambda n: (0 if "cover" in n.lower() else 1, n))
+            if candidates:
+                dest.write_bytes(z.read(candidates[0]))
+    except Exception:
+        pass
+
+
+def _cover(manga_dir: Path) -> Path | None:
+    p = manga_dir / "cover.jpg"
+    if p.exists():
+        return p
+    files = sorted(manga_dir.iterdir())
+    for ext in (".epub", ".cbz"):
+        for f in files:
+            if f.suffix.lower() == ext:
+                _try_extract_cover(f, p)
+                if p.exists():
+                    return p
+                break
+    return None
+
+
+def list_mangas(
+    library_dir: Path,
+    page: int = 1,
+    page_size: int = PAGE_SIZE,
+) -> tuple[list[LibraryEntry], int]:
+    """Return (entries_for_page, total_manga_count)."""
     if not library_dir.exists():
-        return []
+        return [], 0
+    all_dirs = sorted(
+        (d for d in library_dir.iterdir() if d.is_dir()),
+        key=lambda p: p.name.lower(),
+    )
+    total = len(all_dirs)
+    start = (page - 1) * page_size
     out: list[LibraryEntry] = []
-    for d in sorted(library_dir.iterdir(), key=lambda p: p.name.lower()):
-        if not d.is_dir():
-            continue
+    for d in all_dirs[start : start + page_size]:
         files = _list_files(d)
         if not files:
             continue
-        out.append(
-            LibraryEntry(
-                slug=d.name,
-                title=d.name,
-                files=files,
-                total_bytes=sum(f.stat().st_size for f in files),
-            )
-        )
-    return out
+        out.append(LibraryEntry(
+            slug=d.name,
+            title=d.name,
+            files=files,
+            total_bytes=sum(f.stat().st_size for f in files),
+            cover_path=_cover(d),
+        ))
+    return out, total
 
 
 def get_manga(library_dir: Path, slug: str) -> LibraryEntry | None:
@@ -69,6 +111,7 @@ def get_manga(library_dir: Path, slug: str) -> LibraryEntry | None:
         title=manga_dir.name,
         files=files,
         total_bytes=sum(f.stat().st_size for f in files),
+        cover_path=_cover(manga_dir),
     )
 
 

@@ -9,6 +9,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import img2pdf
@@ -16,6 +17,13 @@ from ebooklib import epub
 from PIL import Image
 
 from .scraper import UA, MangaMeta
+
+_FORMAT_EXT: dict[str, str] = {
+    "cbz": ".cbz",
+    "pdf": ".pdf",
+    "epub": ".epub",
+    "kindle": ".kindle.epub",
+}
 
 
 @dataclass
@@ -196,11 +204,13 @@ async def make_epub(
     book_title = _book_title(manga, chapters, volume)
     series_index = volume if volume is not None else (chapters[0].meta.number or "1")
 
+    publisher = urlparse(referer).netloc or "mangoteka"
+
     book.set_identifier(f"urn:uuid:{uuid.uuid4()}")
     book.set_title(book_title)
     book.set_language("uk")
     book.add_author(manga.author_label)
-    book.add_metadata("DC", "publisher", "manga.in.ua")
+    book.add_metadata("DC", "publisher", publisher)
     if manga.description:
         book.add_metadata("DC", "description", manga.description)
     for g in manga.genres:
@@ -397,6 +407,7 @@ async def make_kindle_epub(
     *,
     manga: MangaMeta,
     chapters: "list[EpubChapter]",
+    referer: str = "",
     volume: str | None = None,
     profile: str = "KPW5",
 ) -> Path:
@@ -443,3 +454,26 @@ async def make_kindle_epub(
     except OSError:
         pass
     return epub_path
+
+
+async def package_chapters(
+    fmt: str,
+    out_path: Path,
+    manga: MangaMeta,
+    chapters: list[EpubChapter],
+    *,
+    referer: str,
+    volume: str | None = None,
+) -> Path:
+    """Dispatch to the right format packager. Shared by the web job runner and CLI."""
+    if fmt == "cbz":
+        make_cbz_from_chapters(chapters, out_path)
+    elif fmt == "pdf":
+        make_pdf_from_chapters(chapters, out_path)
+    elif fmt == "epub":
+        await make_epub(out_path, manga=manga, chapters=chapters, referer=referer, volume=volume)
+    elif fmt == "kindle":
+        await make_kindle_epub(out_path, manga=manga, chapters=chapters, referer=referer, volume=volume)
+    else:
+        raise ValueError(f"unknown format: {fmt}")
+    return out_path

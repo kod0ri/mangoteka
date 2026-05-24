@@ -24,6 +24,32 @@
           {% if manga.translators %}
             <div class="muted small">Переклад: {{ manga.translators|join(', ') }}</div>
           {% endif %}
+
+          {% if manga.available_langs|length > 1 %}
+            {% set lang_names = {
+              'uk': 'Українська', 'en': 'English', 'ru': 'Русский',
+              'ja': '日本語', 'zh': '中文', 'zh-hk': '中文 (HK)',
+              'ko': '한국어', 'fr': 'Français', 'de': 'Deutsch',
+              'es': 'Español', 'es-la': 'Español (LA)', 'pt': 'Português',
+              'pt-br': 'Português (BR)', 'it': 'Italiano', 'pl': 'Polski',
+              'tr': 'Türkçe', 'vi': 'Tiếng Việt', 'id': 'Indonesia',
+              'th': 'ภาษาไทย', 'ar': 'العربية'
+            } %}
+            <div class="lang-switcher">
+              <span class="muted small">Мова:</span>
+              {% for l in manga.available_langs %}
+                <button type="button"
+                        class="lang-btn{% if l == current_lang %} active{% endif %}"
+                        hx-post="/fetch-chapters"
+                        hx-target="#chapters"
+                        hx-swap="innerHTML"
+                        hx-vals='{"url": "{{ url }}", "lang": "{{ l }}"}'
+                        hx-indicator="#loading">
+                  {{ lang_names.get(l, l) }}
+                </button>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
       </section>
     {% endif %}

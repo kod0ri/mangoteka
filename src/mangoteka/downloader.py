@@ -57,10 +57,7 @@ async def download_images(
     """Download images concurrently.
 
     `concurrency`: per-chapter cap (local).
-    `global_sem`: optional cross-job cap (shared by all callers using the same
-                  Semaphore) — useful when several jobs run in parallel and we
-                  need to keep total in-flight requests under the server's
-                  rate limit.
+    `global_sem`: optional cross-job cap shared by all callers.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     width = max(3, len(str(len(image_urls))))
@@ -76,12 +73,27 @@ async def download_images(
             if dest.exists() and dest.stat().st_size > 0:
                 return dest
 
-            async def _acquire():
+            # Track whether we currently hold both semaphores so the finally
+            # block can skip a second release if we already released during a
+            # 429 back-off (fixes double-release on CancelledError).
+            _held = False
+
+            async def _acquire() -> None:
+                nonlocal _held
                 await local_sem.acquire()
                 if global_sem is not None:
-                    await global_sem.acquire()
+                    try:
+                        await global_sem.acquire()
+                    except BaseException:
+                        local_sem.release()
+                        raise
+                _held = True
 
-            def _release():
+            def _release() -> None:
+                nonlocal _held
+                if not _held:
+                    return
+                _held = False
                 local_sem.release()
                 if global_sem is not None:
                     global_sem.release()
@@ -89,8 +101,6 @@ async def download_images(
             await _acquire()
             try:
                 last_err: Exception | None = None
-                # Standard retries cover network glitches; 429 has its own,
-                # generous budget driven by the server's Retry-After hint.
                 rate_limit_retries = 0
                 attempt = 0
                 while True:
@@ -106,9 +116,6 @@ async def download_images(
                                     f"429 Too Many Requests after 8 retries: {url}"
                                 )
                             wait = _retry_after_seconds(r, default=10.0)
-                            # Release the slot so other downloads can drain
-                            # while we back off — but keep our place in the
-                            # retry loop. After waiting, reacquire.
                             _release()
                             print(
                                 f"\n[429] backing off {wait:.0f}s "

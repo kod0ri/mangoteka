@@ -6,26 +6,10 @@ from dataclasses import dataclass, field
 import httpx
 from bs4 import BeautifulSoup
 
+from ._http import RetryClient
+
 BASE = "https://manga.in.ua"
 
-
-def make_client(
-    url: str,
-    timeout: float = 30.0,
-    concurrency: int = 4,
-    status_callback: "callable[[str], None] | None" = None,
-) -> "MangaClient":
-    """Return the right scraper client for the given URL."""
-    from .faust_scraper import FaustClient, is_faust_url  # lazy import
-    if is_faust_url(url):
-        return FaustClient(  # type: ignore[return-value]
-            timeout=timeout, concurrency=concurrency,
-            status_callback=status_callback,
-        )
-    return MangaClient(
-        timeout=timeout, concurrency=concurrency,
-        status_callback=status_callback,
-    )
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
@@ -39,6 +23,49 @@ _CHAPTER_URL_RE = re.compile(
 _TITLE_URL_RE = re.compile(
     r"^https?://manga\.in\.ua/mangas/[^/]+/(\d+)-([^/]+)\.html$"
 )
+
+
+def make_client(
+    url: str,
+    timeout: float = 30.0,
+    concurrency: int = 4,
+    status_callback: "callable[[str], None] | None" = None,
+) -> "MangaClient":
+    """Return the right scraper client for the given URL."""
+    from .mangaplus_scraper import MangaPlusClient, is_mangaplus_url
+    if is_mangaplus_url(url):
+        return MangaPlusClient(  # type: ignore[return-value]
+            timeout=timeout, concurrency=concurrency,
+            status_callback=status_callback,
+        )
+    from .mangadex_scraper import MangaDexClient, is_mangadex_url
+    if is_mangadex_url(url):
+        return MangaDexClient(  # type: ignore[return-value]
+            timeout=timeout, concurrency=concurrency,
+            status_callback=status_callback,
+        )
+    from .comick_scraper import ComickClient, is_comick_url
+    if is_comick_url(url):
+        return ComickClient(  # type: ignore[return-value]
+            timeout=timeout, concurrency=concurrency,
+            status_callback=status_callback,
+        )
+    from .webtoon_scraper import WebtoonClient, is_webtoon_url
+    if is_webtoon_url(url):
+        return WebtoonClient(  # type: ignore[return-value]
+            timeout=timeout, concurrency=concurrency,
+            status_callback=status_callback,
+        )
+    from .faust_scraper import FaustClient, is_faust_url
+    if is_faust_url(url):
+        return FaustClient(  # type: ignore[return-value]
+            timeout=timeout, concurrency=concurrency,
+            status_callback=status_callback,
+        )
+    return MangaClient(
+        timeout=timeout, concurrency=concurrency,
+        status_callback=status_callback,
+    )
 
 
 @dataclass
@@ -68,90 +95,33 @@ class MangaMeta:
     translators: list[str] = field(default_factory=list)
     translation_status: str | None = None
     kind: str | None = None  # МАНҐА / манхва / манхуа
+    available_langs: list[str] = field(default_factory=list)
 
     @property
     def author_label(self) -> str:
-        """A best-effort 'author' string for EPUB metadata.
-        manga.in.ua doesn't expose the actual mangaka, so we fall back to translators."""
         if self.translators:
             return ", ".join(self.translators)
-        return "manga.in.ua"
+        return "mangoteka"
 
 
-class MangaClient:
+class MangaClient(RetryClient):
     def __init__(
         self,
         timeout: float = 30.0,
         concurrency: int = 4,
         status_callback: "callable[[str], None] | None" = None,
     ) -> None:
-        self._client = httpx.AsyncClient(
-            headers={"user-agent": UA, "accept-language": "uk,en;q=0.8"},
-            timeout=timeout,
-            follow_redirects=True,
-            http2=True,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+        super().__init__(
+            client=httpx.AsyncClient(
+                headers={"user-agent": UA, "accept-language": "uk,en;q=0.8"},
+                timeout=timeout,
+                follow_redirects=True,
+                http2=True,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+            ),
+            concurrency=concurrency,
+            status_callback=status_callback,
         )
-        # Cap concurrent HTML / AJAX requests so we don't hammer Cloudflare
-        # when many chapters fan out in parallel.
-        import asyncio as _asyncio
-        self._sem = _asyncio.Semaphore(concurrency)
-        # Optional hook so the running job can surface a "backing off (429)…"
-        # message to the UI without us reaching into job state from here.
-        self._status_callback = status_callback
-
-    async def __aenter__(self) -> "MangaClient":
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self._client.aclose()
-
-    async def _request(
-        self,
-        method: str,
-        url: str,
-        *,
-        max_429_retries: int = 8,
-        **kwargs,
-    ) -> httpx.Response:
-        """Wrap every outbound request with a Cloudflare-aware 429 retry loop.
-
-        On 429 we respect Retry-After (falling back to 10s), release our local
-        semaphore slot while we back off so peers can drain, and retry up to
-        `max_429_retries` times before giving up.
-        """
-        import asyncio as _asyncio
-        rl_retries = 0
-        while True:
-            await self._sem.acquire()
-            try:
-                r = await self._client.request(method, url, **kwargs)
-            except Exception:
-                self._sem.release()
-                raise
-            if r.status_code != 429:
-                self._sem.release()
-                r.raise_for_status()
-                return r
-
-            rl_retries += 1
-            if rl_retries > max_429_retries:
-                self._sem.release()
-                r.raise_for_status()  # will raise HTTPStatusError(429)
-
-            raw = r.headers.get("retry-after")
-            try:
-                wait = max(5.0, float(raw)) if raw else 10.0
-            except ValueError:
-                wait = 10.0
-            # Release the slot during sleep so the rest of the pipeline keeps
-            # moving (and we don't all wake up at once after the back-off).
-            self._sem.release()
-            if self._status_callback:
-                self._status_callback(
-                    f"⚠ 429 backoff {wait:.0f}s (retry {rl_retries}/{max_429_retries})"
-                )
-            await _asyncio.sleep(wait)
 
     async def _get_html(self, url: str) -> str:
         r = await self._request("GET", url)
@@ -165,9 +135,7 @@ class MangaClient:
         return m.group(1)
 
     async def fetch_meta(self, any_url: str) -> MangaMeta:
-        """Scrape manga metadata from a title page OR a chapter page.
-        Both pages embed the same sidebar; chapter pages also include manga title via og:*.
-        """
+        """Scrape manga metadata from a title page OR a chapter page."""
         html = await self._get_html(any_url)
         soup = BeautifulSoup(html, "lxml")
 
@@ -182,8 +150,6 @@ class MangaClient:
                 ).strip()
         title = title or "manga"
 
-        # If we landed on a chapter page, strip trailing " - Том X..." / chapter info
-        # and the " читати українською - Manga.in.ua" suffix that appears in og:title.
         title = re.sub(
             r"\s+читати\s+українською.*$", "", title, flags=re.IGNORECASE
         )
@@ -213,8 +179,6 @@ class MangaClient:
         og_image_tag = soup.select_one('meta[property="og:image"]')
 
         translators = field_links(r"^Переклад(?!\s*статус)")
-        # On chapter pages the full sidebar is missing, but the per-chapter
-        # translator line is rendered as plain text: "<b>Переклад:</b> Foo, Bar".
         if not translators:
             page_text = soup.get_text("\n")
             m = re.search(
@@ -294,9 +258,6 @@ class MangaClient:
         if not news_id:
             raise RuntimeError("data-news_id missing on #linkstocomics")
 
-        # news_category=54 forces the dropdown (<option>) rendering of the chapter
-        # list. Title pages have category=1 which returns a different card layout
-        # we can't easily parse — so we hardcode 54 regardless.
         r = await self._request(
             "POST",
             AJAX,
@@ -333,3 +294,45 @@ class MangaClient:
         if not out:
             raise RuntimeError("chapter list is empty")
         return out
+
+    @classmethod
+    async def search(cls, query: str, limit: int = 10) -> "list":
+        """Search manga.in.ua and return SearchResult list."""
+        from .search import SearchResult
+        async with cls() as client:
+            r = await client._request(
+                "GET",
+                f"{BASE}/index.php",
+                params={"do": "search", "subaction": "search", "story": query},
+            )
+        soup = BeautifulSoup(r.text, "lxml")
+        results: list[SearchResult] = []
+        # DLE item cards — try multiple selector patterns
+        cards = soup.select("article.item, div.item, .short-story")[:limit]
+        for card in cards:
+            link_el = (
+                card.select_one("a[href*='/mangas/']")
+                or card.select_one("h2 a, h3 a, .item-title a")
+            )
+            if not link_el:
+                continue
+            url = str(link_el.get("href", ""))
+            if not url.startswith("http"):
+                url = BASE + url if url.startswith("/") else f"{BASE}/{url}"
+            title_el = card.select_one("h2, h3, .item-title, .short_title")
+            title = title_el.get_text(strip=True) if title_el else link_el.get_text(strip=True)
+            if not title or not url:
+                continue
+            img_el = card.select_one("img[src], img[data-src]")
+            cover_url: str | None = None
+            if img_el:
+                raw_src = str(img_el.get("src") or img_el.get("data-src") or "")
+                if raw_src:
+                    cover_url = raw_src if raw_src.startswith("http") else BASE + raw_src
+            results.append(SearchResult(
+                title=title,
+                url=url,
+                source="manga-in-ua",
+                cover_url=cover_url,
+            ))
+        return results

@@ -7,72 +7,62 @@ from pathlib import Path
 
 import click
 
+from .converters import (
+    ChapterMeta,
+    EpubChapter,
+    _FORMAT_EXT,
+    chapter_filename,
+    package_chapters,
+    safe_filename,
+)
 from .downloader import download_images
-from .packager import make_cbz
 from .scraper import Chapter, make_client
 
 
-def _slug(text: str, max_len: int = 80) -> str:
-    text = text.replace("/", "-").replace("\\", "-")
-    text = re.sub(r"[^\w\s.-]+", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", "_", text).strip("._-")
-    return text[:max_len] or "manga"
+def _chapter_meta(ch: Chapter, idx: int) -> ChapterMeta:
+    return ChapterMeta(number=ch.number or str(idx), title=ch.title, volume=ch.volume)
 
 
-def _chapter_filename(ch: Chapter, pad: int) -> str:
-    num = (ch.number or "0").zfill(pad)
-    vol = f"v{ch.volume.zfill(2)}_" if ch.volume else ""
-    return f"{vol}c{num}_{_slug(ch.title)}.cbz"
-
-
-async def _download_one(
-    client: object,
-    chapter_url: str,
-    cbz_path: Path,
-    label: str,
-    concurrency: int,
-    keep_raw: bool,
-) -> Path:
-    title, urls = await client.fetch_chapter_images(chapter_url)
-    with tempfile.TemporaryDirectory(prefix="mangadl_") as tmp:
-        tmp_dir = Path(tmp)
-        files = await download_images(
-            urls,
-            tmp_dir,
-            referer=chapter_url,
-            concurrency=concurrency,
-            progress_desc=label,
-        )
-        make_cbz(files, cbz_path)
-        if keep_raw:
-            raw_dir = cbz_path.with_suffix("")
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            for f in files:
-                (raw_dir / f.name).write_bytes(f.read_bytes())
-    return cbz_path
+async def _download_chapter_images(client, chapter_url: str, tmp_dir: Path, concurrency: int) -> list[Path]:
+    if hasattr(client, "download_images_to_dir"):
+        return await client.download_images_to_dir(chapter_url, tmp_dir, concurrency=concurrency)
+    _, urls = await client.fetch_chapter_images(chapter_url)
+    return await download_images(
+        urls, tmp_dir, referer=chapter_url, concurrency=concurrency,
+    )
 
 
 @click.group()
 def cli() -> None:
-    """Download manga from manga.in.ua or faust-web.com as CBZ / PDF / EPUB / Kindle EPUB."""
+    """Download manga from manga.in.ua, faust-web.com, MangaDex, Comick, Webtoon as CBZ / PDF / EPUB / Kindle EPUB."""
 
 
 @cli.command("chapter")
 @click.argument("url")
 @click.option("-o", "--out", type=click.Path(path_type=Path), default=Path("./out"))
 @click.option("-c", "--concurrency", type=int, default=8)
-@click.option("--keep-raw", is_flag=True, help="Keep extracted images next to CBZ")
-def chapter_cmd(url: str, out: Path, concurrency: int, keep_raw: bool) -> None:
+@click.option(
+    "-f", "--format",
+    "fmt",
+    type=click.Choice(["cbz", "pdf", "epub", "kindle"]),
+    default="cbz",
+    show_default=True,
+)
+def chapter_cmd(url: str, out: Path, concurrency: int, fmt: str) -> None:
     """Download a single chapter URL."""
 
     async def run() -> None:
         async with make_client(url) as client:
+            meta = await client.fetch_meta(url)
             m = re.search(r"/chapters/\d+-([^/]+)\.html$", url)
-            slug = m.group(1) if m else "chapter"
-            cbz_path = out / f"{_slug(slug)}.cbz"
-            cbz_path.parent.mkdir(parents=True, exist_ok=True)
-            await _download_one(client, url, cbz_path, slug, concurrency, keep_raw)
-            click.echo(f"\nDone: {cbz_path}")
+            slug = m.group(1) if m else safe_filename(meta.title)
+            ch_meta = ChapterMeta(number="1", title=slug)
+            out_path = out / f"{safe_filename(slug)}{_FORMAT_EXT[fmt]}"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="mangadl_") as tmp:
+                images = await _download_chapter_images(client, url, Path(tmp), concurrency)
+                await package_chapters(fmt, out_path, meta, [EpubChapter(meta=ch_meta, image_paths=images)], referer=url)
+            click.echo(f"\nDone: {out_path}")
 
     asyncio.run(run())
 
@@ -84,7 +74,13 @@ def chapter_cmd(url: str, out: Path, concurrency: int, keep_raw: bool) -> None:
 @click.option("--from", "from_", type=int, default=None, help="First chapter number")
 @click.option("--to", "to", type=int, default=None, help="Last chapter number (inclusive)")
 @click.option("--list-only", is_flag=True, help="Print chapter list and exit")
-@click.option("--keep-raw", is_flag=True)
+@click.option(
+    "-f", "--format",
+    "fmt",
+    type=click.Choice(["cbz", "pdf", "epub", "kindle"]),
+    default="cbz",
+    show_default=True,
+)
 def title_cmd(
     url: str,
     out: Path,
@@ -92,7 +88,7 @@ def title_cmd(
     from_: int | None,
     to: int | None,
     list_only: bool,
-    keep_raw: bool,
+    fmt: str,
 ) -> None:
     """Download chapters from a title page (or any chapter URL of that title)."""
 
@@ -102,7 +98,7 @@ def title_cmd(
                 client.fetch_meta(url),
                 client.fetch_chapter_list(url),
             )
-            title_slug = _slug(meta.title)
+            title_slug = safe_filename(meta.title, max_len=80)
 
             def in_range(ch: Chapter) -> bool:
                 try:
@@ -125,16 +121,18 @@ def title_cmd(
             target_dir = out / title_slug
             target_dir.mkdir(parents=True, exist_ok=True)
             pad = max(3, len(str(len(chapters))))
+            ext = _FORMAT_EXT[fmt]
 
-            for ch in selected:
-                cbz_path = target_dir / _chapter_filename(ch, pad)
-                if cbz_path.exists() and cbz_path.stat().st_size > 0:
-                    click.echo(f"skip (exists): {cbz_path.name}")
+            for idx, ch in enumerate(selected, start=1):
+                ch_meta = _chapter_meta(ch, idx)
+                out_path = target_dir / chapter_filename(meta.title, ch_meta, pad, ext)
+                if out_path.exists() and out_path.stat().st_size > 0:
+                    click.echo(f"skip (exists): {out_path.name}")
                     continue
-                label = f"c{ch.number}"
-                await _download_one(
-                    client, ch.url, cbz_path, label, concurrency, keep_raw
-                )
+                click.echo(f"downloading: {out_path.name}")
+                with tempfile.TemporaryDirectory(prefix="mangadl_") as tmp:
+                    images = await _download_chapter_images(client, ch.url, Path(tmp), concurrency)
+                    await package_chapters(fmt, out_path, meta, [EpubChapter(meta=ch_meta, image_paths=images)], referer=ch.url)
             click.echo(f"\nDone: {target_dir}")
 
     asyncio.run(run())
