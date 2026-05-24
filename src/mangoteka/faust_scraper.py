@@ -113,14 +113,13 @@ class FaustClient(RetryClient):
     async def search(cls, query: str, limit: int = 10) -> list:
         """Search faust-web.com and return SearchResult list."""
         from .search import SearchResult
-        try:
-            async with cls() as client:
-                r = await client._get("/titles", params={"search": query, "limit": limit})
-                data = r.json()
-        except Exception:
-            return []
+        async with cls() as client:
+            r = await client._get("/titles", params={"search": query, "limit": limit})
+            data = r.json()
         results: list[SearchResult] = []
-        items = data if isinstance(data, list) else data.get("items") or data.get("data") or []
+        items = data if isinstance(data, list) else (
+            data.get("titles") or data.get("items") or data.get("data") or []
+        )
         for item in items[:limit]:
             slug = item.get("slug", "")
             title = item.get("name") or item.get("title") or slug
@@ -132,7 +131,6 @@ class FaustClient(RetryClient):
                 source="faust",
                 cover_url=item.get("coverImageUrl"),
                 status=item.get("publicationStatus"),
-                genres=[g["name"] for g in item.get("genres", []) if g.get("name")],
             ))
         return results
 

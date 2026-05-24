@@ -47,8 +47,15 @@
           <input type="hidden" name="mode" value="{{ job.retry_mode }}">
           <input type="hidden" name="chapter_concurrency" value="{{ job.chapter_concurrency }}">
           <input type="hidden" name="image_concurrency" value="{{ job.image_concurrency }}">
-          {% for u in job.retry_chapters %}
-            <input type="hidden" name="chapter" value="{{ u }}">
+          {% for a in job.artifacts %}
+            {% if not a.artifact and not a.skipped %}
+              {% for u in (a.retry_urls if a.retry_urls else [a.chapter_url]) %}
+                <input type="hidden" name="chapter" value="{{ u }}">
+                {% if a.volume %}
+                  <input type="hidden" name="ch_meta" value='{"url":"{{ u }}","volume":"{{ a.volume }}","number":"{{ a.chapter_number }}","title":""}'>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
           {% endfor %}
           <button type="submit" class="primary retry-all-btn">
             🔄 Повторити всі помилкові ({{ failed|length }})
@@ -75,6 +82,9 @@
                 <input type="hidden" name="image_concurrency" value="{{ job.image_concurrency }}">
                 {% for u in (a.retry_urls if a.retry_urls else [a.chapter_url]) %}
                   <input type="hidden" name="chapter" value="{{ u }}">
+                  {% if a.volume %}
+                    <input type="hidden" name="ch_meta" value='{"url":"{{ u }}","volume":"{{ a.volume }}","number":"{{ a.chapter_number }}","title":""}'>
+                  {% endif %}
                 {% endfor %}
                 <button type="submit" class="retry-btn" title="Повторити цю главу">🔄</button>
               </form>

@@ -124,7 +124,7 @@
           </summary>
           <ul class="chapter-list">
             {% for ch in chs %}
-              <li data-volume="{{ volume }}" data-search="{{ (ch.title or '')|lower }}">
+              <li data-volume="{{ volume }}" data-number="{{ ch.number }}" data-title="{{ ch.title|e }}" data-search="{{ (ch.title or '')|lower }}">
                 <label>
                   <input type="checkbox" name="chapter" value="{{ ch.url }}">
                   <span class="ch-num">Розділ {{ ch.number }}</span>
@@ -184,6 +184,25 @@
       });
 
       update();
+
+      // Serialize selected chapter metadata into hidden inputs before submit.
+      form.addEventListener('submit', function() {
+        form.querySelectorAll('input[name=ch_meta]').forEach(function(i) { i.remove(); });
+        form.querySelectorAll('input[name=chapter]:checked').forEach(function(cb) {
+          var li = cb.closest('li');
+          var vol = li.dataset.volume;
+          var inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'ch_meta';
+          inp.value = JSON.stringify({
+            url: cb.value,
+            volume: (vol && vol !== '—') ? vol : null,
+            number: li.dataset.number || '',
+            title: li.dataset.title || ''
+          });
+          form.appendChild(inp);
+        });
+      });
 
       // Close the settings popover on outside click / Escape.
       const settings = document.querySelector('.settings-popover');

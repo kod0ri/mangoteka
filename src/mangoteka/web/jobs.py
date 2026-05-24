@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -42,6 +43,8 @@ OutputFormat = Literal["cbz", "pdf", "epub", "kindle"]
 Mode = Literal["single", "volume"]
 TERMINAL_STATUSES = {"done", "error", "stopped", "cancelled"}
 
+_log = logging.getLogger(__name__)
+
 
 @dataclass
 class JobChapterResult:
@@ -53,6 +56,7 @@ class JobChapterResult:
     skipped: bool = False
     retry_urls: list[str] = field(default_factory=list)
     retry_mode: Mode = "single"
+    volume: str | None = None
 
 
 @dataclass
@@ -74,6 +78,7 @@ class Job:
     chapter_concurrency: int = DEFAULT_CHAPTER_CONCURRENCY
     image_concurrency: int = DEFAULT_IMAGE_CONCURRENCY
     owned_files: list[Path] = field(default_factory=list)
+    chapter_meta: dict[str, Chapter] = field(default_factory=dict)
     pause_event: asyncio.Event = field(default_factory=asyncio.Event)
     stop_requested: bool = False
     cancel_requested: bool = False
@@ -135,7 +140,7 @@ def _parse_volume_chapter(chapter_title: str, url: str) -> tuple[str | None, str
         if m:
             num = m.group(1)
     if not vol:
-        m = re.search(r"-tom[-_](\d+)", url)
+        m = re.search(r"\btom[-_](\d+)", url)
         if m:
             vol = m.group(1)
     return vol, num or "0"
@@ -177,6 +182,7 @@ class JobStore:
         chapter_urls: list[str],
         output_format: OutputFormat,
         mode: Mode = "single",
+        chapter_meta: "dict[str, Chapter] | None" = None,
         chapter_concurrency: int = DEFAULT_CHAPTER_CONCURRENCY,
         image_concurrency: int = DEFAULT_IMAGE_CONCURRENCY,
     ) -> Job:
@@ -190,6 +196,7 @@ class JobStore:
             chapters_total=len(chapter_urls),
             chapter_concurrency=max(1, min(chapter_concurrency, 6)),
             image_concurrency=max(1, min(image_concurrency, 20)),
+            chapter_meta=chapter_meta or {},
         )
         self._jobs[job_id] = job
         self._tasks[job_id] = asyncio.create_task(self._run(job))
@@ -245,6 +252,7 @@ class JobStore:
     # ---- runner ----
 
     async def _run(self, job: Job) -> None:
+        _log.info("job %s: start — %d chapters, format=%s, mode=%s", job.id, len(job.chapter_urls), job.output_format, job.mode)
         try:
             job.status = "running"
             job.current = "fetching manga metadata"
@@ -264,10 +272,23 @@ class JobStore:
                 manga_dir = self.library_dir / job.manga_slug
                 manga_dir.mkdir(parents=True, exist_ok=True)
                 await self._save_cover(meta.cover_url, manga_dir, job.title_or_chapter_url)
-                chapter_info: dict[str, Chapter] = (
-                    {} if isinstance(cl_result, BaseException)
-                    else {c.url: c for c in cl_result}
-                )
+                # Stored metadata (from web form) is the primary source — works even
+                # when the re-fetch fails or returns different URLs than what was selected.
+                chapter_info: dict[str, Chapter] = dict(job.chapter_meta)
+                if isinstance(cl_result, BaseException):
+                    _log.warning(
+                        "job %s: fetch_chapter_list failed (%s) — using stored metadata (%d entries)",
+                        job.id, cl_result, len(chapter_info),
+                    )
+                else:
+                    for c in cl_result:
+                        chapter_info[c.url] = c
+                    _log.info(
+                        "job %s: chapter_info ready: %d entries (%d re-fetched, %d from stored)",
+                        job.id, len(chapter_info), len(cl_result), len(job.chapter_meta),
+                    )
+                if not chapter_info:
+                    _log.warning("job %s: chapter_info empty — chapters will be labeled Tom 0 / Rozdil 0", job.id)
 
                 if job.mode == "volume":
                     await self._run_volume_mode(
@@ -296,6 +317,7 @@ class JobStore:
                     job.status = "done"
                     job.current = f"готово — {ok} артефакт(ів)"
                     job.progress = 100
+            _log.info("job %s: terminal status=%s", job.id, job.status)
             await self._save_job(job)
         except asyncio.CancelledError:
             job.status = "cancelled"
@@ -368,11 +390,13 @@ class JobStore:
                             artifact=out_path,
                         )
                     except Exception as e:  # noqa: BLE001
+                        _log.error("job %s: chapter %s error: %s", job.id, ch_url, e)
                         result = JobChapterResult(
                             chapter_number=ch_meta.number,
                             chapter_title=label,
                             chapter_url=ch_url,
                             error=_err_str(e),
+                            volume=ch_meta.volume,
                         )
 
                 async with done_lock:
@@ -413,6 +437,7 @@ class JobStore:
         done_lock = asyncio.Lock()
         in_volume_chapter_sem = asyncio.Semaphore(job.chapter_concurrency)
         ordered_groups = sorted(groups.items(), key=lambda kv: _vol_sort_key(kv[0]))
+        _log.info("job %s: %d volume groups: %s", job.id, len(ordered_groups), {k: len(v) for k, v in ordered_groups})
 
         for volume, urls in ordered_groups:
             await job.pause_event.wait()
@@ -478,6 +503,7 @@ class JobStore:
                                         # gets rebuilt (not a standalone chapter).
                                         retry_urls=vol_urls,
                                         retry_mode="volume",
+                                        volume=volume,
                                     )
                                 )
                         async with done_lock:
@@ -719,6 +745,7 @@ def _artifact_to_dict(a: JobChapterResult) -> dict:
         "skipped": a.skipped,
         "retry_urls": a.retry_urls,
         "retry_mode": a.retry_mode,
+        "volume": a.volume,
     }
 
 
@@ -736,4 +763,5 @@ def _artifact_from_dict(d: dict, manga_dir: Path) -> JobChapterResult:
         skipped=d.get("skipped", False),
         retry_urls=d.get("retry_urls", []),
         retry_mode=d.get("retry_mode", "single"),
+        volume=d.get("volume"),
     )

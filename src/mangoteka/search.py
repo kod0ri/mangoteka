@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,8 +75,11 @@ async def search_all(query: str, limit: int = 8) -> tuple[list[SearchResult], li
 
     async def _safe(coro, name: str) -> list[SearchResult]:
         try:
-            return await coro
+            r = await coro
+            _log.info("search %s: %d results", name, len(r))
+            return r
         except Exception as e:  # noqa: BLE001
+            _log.warning("search %s failed: %s", name, e)
             errors.append(f"{name}: {e}")
             return []
 

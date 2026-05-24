@@ -8,6 +8,9 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       MANGOTEKA_HOST: "0.0.0.0"
       MANGOTEKA_PORT: "8000"

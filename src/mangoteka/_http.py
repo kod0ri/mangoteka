@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 
 class RetryClient:
@@ -55,6 +58,7 @@ class RetryClient:
             except ValueError:
                 wait = 10.0
             self._sem.release()
+            _log.warning("429 from %s, retry %d/%d, backoff %.0fs", url, retries, self._max_429, wait)
             if self._status_callback:
                 self._status_callback(
                     f"⚠ 429 backoff {wait:.0f}s ({retries}/{self._max_429})"

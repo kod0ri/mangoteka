@@ -9,13 +9,15 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
+import json
+
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..mangadex_scraper import is_mangadex_url
-from ..scraper import make_client
+from ..scraper import Chapter, make_client
 from ..search import search_all
 from ..converters import _FORMAT_EXT
 from .jobs import JobStore, OutputFormat, _vol_sort_key
@@ -163,6 +165,7 @@ async def create_job(
     mode: Annotated[str, Form()] = "single",
     chapter_concurrency: Annotated[int, Form()] = 3,
     image_concurrency: Annotated[int, Form()] = 10,
+    ch_meta: Annotated[list[str] | None, Form()] = None,
 ) -> RedirectResponse:
     if format not in _FORMAT_EXT:
         raise HTTPException(400, "invalid format")
@@ -170,11 +173,26 @@ async def create_job(
         raise HTTPException(400, "invalid mode")
     if not chapter:
         raise HTTPException(400, "no chapters selected")
+    chapter_metadata: dict[str, Chapter] = {}
+    for raw in (ch_meta or []):
+        try:
+            d = json.loads(raw)
+            u = d.get("url", "")
+            if u:
+                chapter_metadata[u] = Chapter(
+                    url=u,
+                    number=d.get("number") or "",
+                    title=d.get("title") or "",
+                    volume=d.get("volume") or None,
+                )
+        except Exception:
+            pass
     job = get_store().create(
         title_or_chapter_url=url.strip(),
         chapter_urls=chapter,
         output_format=format,  # type: ignore[arg-type]
         mode=mode,  # type: ignore[arg-type]
+        chapter_meta=chapter_metadata,
         chapter_concurrency=chapter_concurrency,
         image_concurrency=image_concurrency,
     )

@@ -1,22 +1,32 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
-from ._http import RetryClient
 from .scraper import Chapter, MangaMeta, UA
 
-API = "https://api.comick.fun"
+_log = logging.getLogger(__name__)
+
+API = "https://api.comick.dev"
 CDN = "https://meo.comick.pictures"
 CDN2 = "https://meo2.comick.pictures"
+
+_HEADERS = {
+    "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "accept": "application/json",
+    "referer": "https://comick.io/",
+    "origin": "https://comick.io",
+}
 
 _TITLE_RE = re.compile(r"comick\.[a-z]+/comic/([^/?#]+)", re.IGNORECASE)
 _CHAPTER_RE = re.compile(r"comick\.[a-z]+/comic/[^/?#]+/([^/?#]+)-chapter", re.IGNORECASE)
 
 
 def is_comick_url(url: str) -> bool:
-    return bool(re.search(r"comick\.(io|app|fun|cc)", url, re.IGNORECASE))
+    return bool(re.search(r"comick\.(io|app|fun|cc|dev)", url, re.IGNORECASE))
 
 
 def _slug_from_url(url: str) -> str:
@@ -31,7 +41,7 @@ def _chapter_hid_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-class ComickClient(RetryClient):
+class ComickClient:
     _max_429 = 6
 
     def __init__(
@@ -40,24 +50,43 @@ class ComickClient(RetryClient):
         concurrency: int = 4,
         status_callback: "callable[[str], None] | None" = None,
     ) -> None:
-        super().__init__(
-            client=httpx.AsyncClient(
-                headers={
-                    "user-agent": UA,
-                    "accept": "application/json",
-                    "referer": "https://comick.io/",
-                },
-                timeout=timeout,
-                follow_redirects=True,
-                http2=True,
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=10),
-            ),
-            concurrency=concurrency,
-            status_callback=status_callback,
-        )
+        self._timeout = timeout
+        self._sem = asyncio.Semaphore(concurrency)
+        self._status_callback = status_callback
+        self._session: AsyncSession | None = None
 
-    async def _get(self, path: str, **kwargs) -> httpx.Response:
-        return await self._request("GET", f"{API}{path}", **kwargs)
+    async def __aenter__(self) -> "ComickClient":
+        self._session = AsyncSession(impersonate="chrome124", timeout=self._timeout)
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self._session:
+            await self._session.close()
+            self._session = None
+
+    async def _get(self, path: str, **kwargs) -> object:
+        assert self._session is not None
+        url = f"{API}{path}"
+        retries = 0
+        while True:
+            async with self._sem:
+                r = await self._session.get(url, headers=_HEADERS, **kwargs)
+            if r.status_code != 429:
+                r.raise_for_status()
+                return r
+            retries += 1
+            if retries > self._max_429:
+                r.raise_for_status()
+                return r
+            raw = r.headers.get("retry-after")
+            try:
+                wait = max(5.0, float(raw)) if raw else 10.0
+            except ValueError:
+                wait = 10.0
+            _log.warning("429 from %s, retry %d/%d, backoff %.0fs", url, retries, self._max_429, wait)
+            if self._status_callback:
+                self._status_callback(f"⚠ 429 backoff {wait:.0f}s ({retries}/{self._max_429})")
+            await asyncio.sleep(wait)
 
     async def _comic_by_slug(self, slug: str) -> dict:
         r = await self._get(f"/comic/{slug}")
@@ -76,10 +105,7 @@ class ComickClient(RetryClient):
         en_title = next((t["title"] for t in titles if t.get("lang") == "en"), None)
         title = en_title or comic.get("title") or slug
 
-        langs = [
-            t.get("lang") for t in (data.get("langList") or [])
-            if t.get("lang")
-        ]
+        langs = [t for t in (data.get("langList") or []) if isinstance(t, str) and t]
 
         return MangaMeta(
             title=title,
@@ -183,7 +209,11 @@ class ComickClient(RetryClient):
 
     @classmethod
     async def search(cls, query: str, limit: int = 10) -> list:
-        """Search Comick and return SearchResult list."""
+        """Search Comick and return SearchResult list.
+
+        Uses curl_cffi to impersonate Chrome TLS fingerprint — api.comick.dev
+        returns 403 for plain Python httpx due to Cloudflare bot detection.
+        """
         from .search import SearchResult
         async with cls() as client:
             r = await client._get(
